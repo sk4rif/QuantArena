@@ -1,0 +1,17 @@
+{
+  "name": "slither-lite-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
+  }
+}

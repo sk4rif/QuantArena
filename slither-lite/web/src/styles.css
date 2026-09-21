@@ -1,0 +1,43 @@
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+button, input, select { font: inherit; }
+#game { position: fixed; inset: 0; display: block; cursor: crosshair; }
+#hud { position: fixed; inset: 0; pointer-events: none; padding: calc(var(--header-h) + 14px) 18px 18px; display: flex; justify-content: space-between; align-items: flex-start; }
+/* The arena is cream, so panels need to sit brighter than it and carry a warm shadow to read as raised. */
+.hud-card { min-width: 180px; padding: 12px 14px; color: var(--text); border: 1px solid var(--border); border-radius: 12px; background: rgba(255, 255, 255, .94); box-shadow: 0 8px 24px rgba(46, 28, 22, .12); backdrop-filter: blur(8px); }
+.hud-card strong { color: var(--accent); }
+.leaderboard { margin: 8px 0 0; padding-left: 22px; }
+.hud-action { display: block; margin-top: 10px; padding: 7px 11px; color: var(--button-text); font-weight: 800; border: 2px solid var(--button-ring); border-radius: 999px; background: var(--button); cursor: pointer; pointer-events: auto; transition: background-color .15s; }
+.hud-action:hover { background: var(--button-hover); }
+.snake-metrics { display: grid; gap: 3px; margin: 9px 0 4px; padding-top: 8px; border-top: 1px solid var(--border); }
+.snake-metrics div { display: flex; justify-content: space-between; gap: 18px; color: var(--muted); font-size: 11px; }
+.snake-metrics strong { color: var(--text); font-variant-numeric: tabular-nums; }
+/* Scoped inside .hud-card so it outranks `.hud-card strong` and `.snake-metrics strong`. */
+.hud-card strong.metric-money { color: var(--money); }
+/* Used by the metric rows and the headline Net profit, which sits outside .snake-metrics. */
+.hud-card .metric-positive { color: var(--money); }
+.hud-card .metric-negative { color: var(--danger); }
+#minimap-panel { position: fixed; right: 18px; bottom: 18px; width: 220px; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: rgba(255, 255, 255, .94); box-shadow: 0 10px 30px rgba(46, 28, 22, .14); backdrop-filter: blur(8px); pointer-events: none; }
+#minimap { display: block; width: 198px; height: 198px; border-radius: 8px; }
+.minimap-title { margin: 0 0 5px; color: var(--text); font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.minimap-legend { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.3; }
+/* Mirrors the heatmap's pale → deep green ramp. */
+.minimap-legend span { display: inline-block; width: 36px; height: 6px; margin-right: 5px; border-radius: 3px; background: linear-gradient(90deg, #93d9a3, #146a33); }
+.minimap-metrics { display: grid; gap: 4px; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border); }
+.minimap-metrics div { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11px; }
+.minimap-metrics strong { color: var(--text); font-variant-numeric: tabular-nums; }
+#overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(251, 250, 248, .58); pointer-events: none; }
+@media (max-width: 700px) { #minimap-panel { right: 10px; bottom: 10px; width: 170px; } #minimap { width: 148px; height: 148px; } }
+.panel { width: min(390px, calc(100vw - 32px)); padding: 28px; color: var(--text); border: 1px solid var(--border); border-radius: 20px; background: #fff; box-shadow: 0 24px 60px rgba(46, 28, 22, .18); pointer-events: auto; }
+.panel h1 { margin: 0 0 8px; color: var(--text); font-size: 34px; }
+.panel p { margin: 0 0 20px; color: var(--muted); line-height: 1.45; }
+.panel label { display: block; margin-top: 14px; color: var(--muted); font-size: 13px; }
+.panel input, .panel select { width: 100%; margin-top: 6px; padding: 11px 12px; color: var(--text); border: 1px solid var(--border); border-radius: 10px; outline: none; background: var(--surface-2); }
+.panel input:focus-visible, .panel select:focus-visible { border-color: var(--accent); }
+.panel button { width: 100%; margin-top: 18px; padding: 12px; color: var(--button-text); font-weight: 800; border: 2px solid var(--button-ring); border-radius: 999px; background: var(--button); cursor: pointer; transition: background-color .15s; }
+.panel button:hover { background: var(--button-hover); }
+.panel .guest-note { margin: 16px 0 0; font-size: 13px; }
+.panel .link-button { display: inline; width: auto; margin: 0; padding: 0; color: var(--accent); font-weight: 700; border: 0; border-radius: 0; background: none; text-decoration: underline; }
+.panel .link-button:hover { background: none; color: var(--accent-hover); }
+.status { min-height: 20px; margin-top: 12px; color: var(--danger); font-size: 13px; }
+.hidden { display: none !important; }
