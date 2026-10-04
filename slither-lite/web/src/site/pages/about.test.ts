@@ -4,7 +4,7 @@ import { renderAbout } from "./about";
 describe("renderAbout", () => {
   it("carries the platform explanation moved off the game list", () => {
     const html = renderAbout();
-    expect(html).toContain("Skillz hosts games");
+    expect(html).toContain("Zero Sum hosts games");
     expect(html).toContain("How a game works");
   });
 });

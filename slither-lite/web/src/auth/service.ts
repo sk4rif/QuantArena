@@ -58,5 +58,5 @@ export class UnavailableAuthService implements AuthService {
 }
 
 function unavailable(): AuthError {
-  return new AuthError("Accounts aren't live yet. PaperArena is open to guests, so you can just pick a name and play.");
+  return new AuthError("Accounts aren't live yet. PaperArena is open to guests, so you can play with the temporary Player name.");
 }

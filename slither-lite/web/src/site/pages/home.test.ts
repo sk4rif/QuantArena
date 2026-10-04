@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { games } from "../catalog";
+import { games } from "../../games";
 import { gamePath } from "../routes";
 import { renderHome } from "./home";
 
@@ -20,7 +20,7 @@ describe("renderHome", () => {
 
   it("leads with the game list rather than the platform pitch", () => {
     const html = renderHome();
-    expect(html).not.toContain("Skillz hosts games");
+    expect(html).not.toContain("Zero Sum hosts games");
     expect(html).not.toContain("How a game works");
   });
 });

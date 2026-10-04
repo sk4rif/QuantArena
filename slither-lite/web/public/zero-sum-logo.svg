@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 276" role="img" aria-labelledby="title">
+  <title id="title">Zero Sum</title>
+  <path fill="#2e1c16" fill-rule="evenodd" d="M83 56c-37 0-53 34-53 87 0 54 16 88 53 88s54-34 54-88c0-53-17-87-54-87Zm0 5c25 0 33 31 33 82 0 52-8 83-33 83s-32-31-32-83c0-51 7-82 32-82Z"/>
+  <path fill="#2e1c16" d="M177 52c-5 0-7 4-4 9l62 89-61 67c-4 4-2 9 3 9h143l7-60h-7c-5 35-20 49-66 49h-62l62-65-55-90h53c47 0 63 12 68 48l7 2-7-58H177Z"/>
+  <path fill="none" stroke="#ef321d" stroke-width="8" d="M45 239 121 48"/>
+</svg>

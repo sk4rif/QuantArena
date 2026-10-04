@@ -1,14 +1,9 @@
-import "./styles.css";
 import "./site.css";
-import { isLive, leaveArena, refreshLobby, startArena } from "./arena";
 import { auth } from "./auth";
 import { mountAuth } from "./auth/ui";
-import { findGame, findLevel, games, type Game, type Level } from "./site/catalog";
+import { findGame, findLevel, games, type GameModule, type Level } from "./games";
 import { renderAbout } from "./site/pages/about";
-import { bindDocs, renderDocs } from "./site/pages/docs";
 import { renderHome } from "./site/pages/home";
-import { renderLevels } from "./site/pages/levels";
-import { hydrateRules, renderRules } from "./site/pages/rules";
 import { gamePath, navRoutesFor, parseLocation, playPath, type NavScope, type Route } from "./site/routes";
 import { escapeHtml, requiredElement } from "./util/html";
 
@@ -40,13 +35,14 @@ const navHighlight: Record<Route, Route> = {
 };
 const rendered = new Set<Route>();
 let current: Route | undefined;
+let pendingNavigation = false;
 /** Game whose level-select page is currently rendered, so it re-renders when the id changes. */
 let renderedGame: string | undefined;
 /** The game and level being played, set before the arena route is shown. */
-let active: { game: Game; level: Level } | undefined;
+let active: { game: GameModule; level: Level } | undefined;
 
 const accountUi = mountAuth(auth, requiredElement("#account"), requiredElement<HTMLDialogElement>("#auth-dialog"));
-auth.subscribe(() => refreshLobby());
+auth.subscribe(() => active?.game.runtime.refreshLobby());
 
 const siteNav = requiredElement("#site-nav");
 const paperBadge = requiredElement<HTMLElement>("#paper-badge");
@@ -62,10 +58,16 @@ document.addEventListener("click", (event) => {
 });
 
 window.addEventListener("hashchange", navigate);
+window.addEventListener("beforeunload", (event) => {
+  if (!active?.game.runtime.isLive()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 navigate();
 
 function navigate(): void {
-  const { route, section, detail } = parseLocation(location.hash);
+  const targetHash = location.hash;
+  const { route, section, detail } = parseLocation(targetHash);
 
   // The arena is only reachable through a concrete, open level.
   if (route === "play") {
@@ -78,13 +80,23 @@ function navigate(): void {
     active = { game, level };
   }
 
-  if (current === "play" && route !== "play" && isLive()) {
-    if (!window.confirm("Leave the arena? Your snake will be cashed out automatically.")) {
-      if (active) history.replaceState(null, "", playPath(active.game.id, active.level.key));
-      return;
+  if (current === "play" && route !== "play" && active?.game.runtime.isLive()) {
+    history.replaceState(null, "", playPath(active.game.id, active.level.key));
+    if (!pendingNavigation) {
+      pendingNavigation = true;
+      const confirmation = active.game.leaveConfirmation;
+      void active.game.runtime
+        .confirmAction(confirmation.title, confirmation.message, confirmation.acceptLabel)
+        .then((confirmed) => {
+          pendingNavigation = false;
+          if (!confirmed) return;
+          active?.game.runtime.leave();
+          location.hash = targetHash;
+        });
     }
+    return;
   }
-  if (current === "play" && route !== "play") leaveArena();
+  if (current === "play" && route !== "play") active?.game.runtime.leave();
 
   if (route === "game" && (!rendered.has("game") || section !== renderedGame)) renderGame(section);
   if (route !== current) show(route);
@@ -113,8 +125,12 @@ function renderNav(route: Route): void {
   paperBadge.hidden = scope !== "game";
 }
 
+function currentGame(): GameModule {
+  return findGame(renderedGame) ?? active?.game ?? games[0]!;
+}
+
 function currentGameId(): string {
-  return active?.game.id ?? renderedGame ?? games[0]!.id;
+  return currentGame().id;
 }
 
 function render(route: Route): void {
@@ -124,39 +140,56 @@ function render(route: Route): void {
   } else if (route === "about") {
     view.innerHTML = renderAbout();
   } else if (route === "rules") {
-    view.innerHTML = renderRules();
-    void hydrateRules(view);
+    const game = currentGame();
+    view.innerHTML = game.renderRules();
+    void game.hydrateRules(view);
   } else if (route === "docs") {
-    view.innerHTML = renderDocs();
-    bindDocs(view);
-  } else if (route === "play") {
-    startArena({
-      defaultName: () => auth.user?.displayName ?? "Player",
+    const game = currentGame();
+    view.innerHTML = game.renderDocs();
+    game.bindDocs(view);
+  } else if (route === "play" && active) {
+    active.game.runtime.start({
+      accountName: () => auth.user?.displayName,
       signedIn: () => auth.user !== null,
       requestSignIn: () => accountUi.open("signIn"),
       level: () => active?.level,
-      changeLevel: () => (location.hash = gamePath(active?.game.id ?? "snake")),
+      changeLevel: () => (location.hash = gamePath(active?.game.id ?? games[0]!.id)),
     });
   }
   rendered.add(route);
 }
 
 function renderGame(gameId: string | undefined): void {
-  views.game.innerHTML = renderLevels(gameId);
+  const game = findGame(gameId);
+  views.game.innerHTML = game ? game.renderLevels(gameId) : renderMissingGame();
+  if (renderedGame !== gameId) {
+    rendered.delete("rules");
+    rendered.delete("docs");
+  }
   renderedGame = gameId;
   rendered.add("game");
+}
+
+function renderMissingGame(): string {
+  return `
+    <article class="doc">
+      <header class="doc-hero">
+        <h1>Game not found</h1>
+        <p class="lead">No game matches this address. <a href="#/">Back to the game list</a>.</p>
+      </header>
+    </article>`;
 }
 
 function title(route: Route): string {
   if (route === "game") {
     const game = findGame(renderedGame);
-    return game ? `${game.name} levels · Skillz` : "Skillz";
+    return game ? `${game.name} levels · Zero Sum` : "Zero Sum";
   }
-  if (route === "play" && active) return `${active.level.label} · ${active.game.name} · Skillz`;
-  if (route === "about") return "About · Skillz";
-  if (route === "rules") return "Rules · Skillz";
-  if (route === "docs") return "API Docs · Skillz";
-  return "Games · Skillz";
+  if (route === "play" && active) return `${active.level.label} · ${active.game.name} · Zero Sum`;
+  if (route === "about") return "About · Zero Sum";
+  if (route === "rules") return "Rules · Zero Sum";
+  if (route === "docs") return "API Docs · Zero Sum";
+  return "Games · Zero Sum";
 }
 
 function scrollToSection(route: Route, section?: string): void {

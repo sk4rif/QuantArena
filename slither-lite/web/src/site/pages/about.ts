@@ -4,7 +4,7 @@ export function renderAbout(): string {
     <header class="doc-hero">
       <span class="pill">Skill, not luck</span>
       <h1>Games decided by skill</h1>
-      <p class="lead">Skillz hosts games in which the outcome comes from your decisions. No dice, no shuffles, no hidden randomness in the result: every game is server-authoritative, the rules are published, and the same API is open to bots and humans.</p>
+      <p class="lead">Zero Sum hosts games in which the outcome comes from your decisions. No dice, no shuffles, no hidden randomness in the result: every game is server-authoritative, the rules are published, and the same API is open to bots and humans.</p>
     </header>
 
     <section id="about-how">

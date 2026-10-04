@@ -4,13 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#fcfaf8" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23dc4325'/%3E%3Ctext x='16' y='23' font-family='Arial' font-weight='900' font-size='21' text-anchor='middle' fill='%23fcfaf8'%3ES%3C/text%3E%3C/svg%3E" />
-    <title>Skillz · games decided by skill</title>
-    <meta name="description" content="Skillz hosts games whose outcome comes from skill rather than luck. Pick a game, pick a level, and play in the browser or with a bot over the API." />
+    <link rel="icon" href="/zero-sum-logo.svg" type="image/svg+xml" />
+    <title>Zero Sum · games decided by skill</title>
+    <meta name="description" content="Zero Sum hosts games whose outcome comes from skill rather than luck. Pick a game, pick a level, and play in the browser or with a bot over the API." />
   </head>
   <body>
     <header class="site-header">
-      <a class="brand" href="#/" aria-label="Skillz home"><span class="brand-mark" aria-hidden="true">S</span><span class="brand-name">Skillz</span></a>
+      <a class="brand" href="#/" aria-label="Zero Sum home"><img class="brand-mark" src="/zero-sum-logo.svg" alt="" /><span class="brand-name">Zero Sum</span></a>
       <nav id="site-nav" aria-label="Main"></nav>
       <span id="paper-badge" class="paper-badge" title="Every level currently open uses a simulated ledger" hidden>Paper money</span>
       <div id="account" class="account"></div>
@@ -19,20 +19,7 @@
       <section id="view-home" class="page" aria-label="Games"></section>
       <section id="view-about" class="page" aria-label="About" hidden></section>
       <section id="view-game" class="page" aria-label="Levels" hidden></section>
-      <section id="view-play" aria-label="Arena" hidden>
-        <canvas id="game"></canvas>
-        <div id="hud"></div>
-        <aside id="minimap-panel" aria-label="Arena minimap">
-          <div class="minimap-title">Arena overview</div>
-          <canvas id="minimap"></canvas>
-          <div class="minimap-legend"><span></span> Dollar-value density · Red: snakes · Dark outline: you · Pink ⌖: money spawn (lowest AUM weight)</div>
-          <div class="minimap-metrics">
-            <div><span>Total AUM</span><strong id="map-total-aum">$0.00</strong></div>
-            <div><span>Cash on floor</span><strong id="map-floor-cash">$0.00</strong></div>
-          </div>
-        </aside>
-        <div id="overlay"></div>
-      </section>
+      <section id="view-play" hidden></section>
       <section id="view-rules" class="page" aria-label="Rules" hidden></section>
       <section id="view-docs" class="page" aria-label="API Docs" hidden></section>
     </main>

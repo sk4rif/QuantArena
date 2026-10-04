@@ -35,8 +35,8 @@
 
 /* Header */
 .site-header { position: fixed; z-index: 20; top: 0; left: 0; right: 0; height: var(--header-h); display: flex; align-items: center; gap: 20px; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--surface); backdrop-filter: blur(12px); }
-.brand { display: flex; align-items: center; gap: 10px; color: var(--accent); font-weight: 800; letter-spacing: .01em; text-decoration: none; }
-.brand-mark { display: grid; place-items: center; width: 28px; height: 28px; color: var(--bg); font-weight: 900; border-radius: 8px; background: var(--accent); }
+.brand { display: flex; align-items: center; gap: 9px; color: var(--text); font-weight: 800; letter-spacing: .01em; text-decoration: none; }
+.brand-mark { display: block; width: 42px; height: 34px; object-fit: contain; }
 #site-nav { display: flex; gap: 4px; margin-right: auto; }
 #site-nav a { padding: 8px 12px; color: var(--muted); font-size: 14px; font-weight: 600; border-radius: 8px; text-decoration: none; }
 #site-nav a:hover { color: var(--accent-hover); background: var(--accent-soft); }

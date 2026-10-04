@@ -1,6 +1,5 @@
 import { escapeHtml } from "../../util/html";
-import { formatMoney } from "../../net/protocol";
-import { games, isFree, type Game } from "../catalog";
+import { formatMoney, games, isFree, type GameModule } from "../../games";
 import { gamePath } from "../routes";
 
 export function renderHome(): string {
@@ -26,7 +25,7 @@ export function renderHome(): string {
   </article>`;
 }
 
-function gameCard(game: Game): string {
+function gameCard(game: GameModule): string {
   const range = stakeRange(game);
   const open = game.availability === "open";
   // The card is a single link, so the call to action is a span rather than a nested anchor.
@@ -46,7 +45,7 @@ function gameCard(game: Game): string {
 }
 
 /** Summarises what a game costs, treating paper levels as free rather than as their simulated ticket. */
-function stakeRange(game: Game): string {
+function stakeRange(game: GameModule): string {
   const paid = game.levels.filter((level) => !isFree(level)).map((level) => level.stakeNanos);
   const free = game.levels.some(isFree);
   if (!paid.length) return free ? "Free" : "–";
