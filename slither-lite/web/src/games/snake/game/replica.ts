@@ -15,6 +15,9 @@ const emptyEconomy: EconomyStateWire = {
   ticketInflowNanos: 0,
   payoutsNanos: 0,
   platformFeesNanos: 0,
+  floorLiquidityRatioPpm: 0,
+  starvationTaxNumerator: 0,
+  inheritanceTaxBasisPoints: 0,
 };
 
 export class Replica {
@@ -23,6 +26,7 @@ export class Replica {
   playerId = 0;
   arenaHalfExtent = 300_000;
   cashOutCompletesAtTick?: number;
+  cashOutInheritanceTaxBasisPoints?: number;
   tickRate = 30;
   publishRate = 15;
   tick = 0;
@@ -33,6 +37,22 @@ export class Replica {
   economyConfig?: EconomyConfigWire;
   synchronized = false;
 
+  /** Drops everything learned from a server, before connecting to a different arena (another region or level). */
+  forgetWorld(): void {
+    this.snakes.clear();
+    this.food.clear();
+    this.playerId = 0;
+    this.cashOutCompletesAtTick = undefined;
+    this.cashOutInheritanceTaxBasisPoints = undefined;
+    this.tick = 0;
+    this.sequence = 0;
+    this.digest = "0000000000000000";
+    this.leaderboard = [];
+    this.economy = { ...emptyEconomy };
+    this.economyConfig = undefined;
+    this.synchronized = false;
+  }
+
   applyBootstrap(message: BootstrapMessage): boolean {
     this.snakes.clear();
     this.food.clear();
@@ -41,6 +61,7 @@ export class Replica {
     this.playerId = message.playerId;
     this.arenaHalfExtent = message.arenaHalfExtent;
     this.cashOutCompletesAtTick = message.cashOutCompletesAtTick ?? undefined;
+    this.cashOutInheritanceTaxBasisPoints = message.cashOutInheritanceTaxBasisPoints ?? undefined;
     this.tickRate = message.tickRate;
     this.publishRate = message.publishRate;
     this.tick = message.tick;
@@ -60,7 +81,10 @@ export class Replica {
     }
     for (const id of message.snakesRemoved) {
       this.snakes.delete(id);
-      if (id === this.playerId) this.cashOutCompletesAtTick = undefined;
+      if (id === this.playerId) {
+        this.cashOutCompletesAtTick = undefined;
+        this.cashOutInheritanceTaxBasisPoints = undefined;
+      }
     }
     for (const snake of message.snakesAdded) this.snakes.set(snake.id, cloneSnake(snake));
     for (const patch of message.snakesUpdated) this.applySnakePatch(patch);

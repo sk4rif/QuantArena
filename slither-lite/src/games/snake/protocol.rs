@@ -102,10 +102,14 @@ pub enum ServerMessage {
         final_worth_nanos: u64,
         #[serde(rename = "ticketNanos")]
         ticket_nanos: u64,
+        #[serde(rename = "collisionId")]
+        collision_id: Option<u64>,
     },
     CashOutPending {
         #[serde(rename = "completesAtTick")]
         completes_at_tick: u64,
+        #[serde(rename = "inheritanceTaxBasisPoints")]
+        inheritance_tax_basis_points: u16,
     },
     CashOutCanceled,
     CashOutReceipt(Receipt),
@@ -128,6 +132,7 @@ pub struct Bootstrap {
     pub publish_rate: u16,
     pub arena_half_extent: i32,
     pub cash_out_completes_at_tick: Option<u64>,
+    pub cash_out_inheritance_tax_basis_points: Option<u16>,
     pub tick: u64,
     pub sequence: u64,
     pub digest: String,
@@ -162,14 +167,18 @@ pub struct EconomyConfigWire {
     pub ticket_nanos: u64,
     pub denominations_nanos: Vec<u64>,
     pub economy_tick_rate: u16,
-    pub treasury_seed_nanos: u64,
+    pub initial_treasury_nanos: u64,
     pub minimum_effective_worth_nanos: u64,
-    pub tax_numerator: u64,
-    pub tax_denominator: u64,
+    pub liquidity_ratio_low_ppm: u64,
+    pub liquidity_ratio_high_ppm: u64,
+    pub starvation_min_numerator: u64,
+    pub starvation_max_numerator: u64,
+    pub starvation_denominator: u64,
+    pub inheritance_tax_min_basis_points: u16,
+    pub inheritance_tax_max_basis_points: u16,
     pub boost_numerator: u64,
     pub boost_denominator: u64,
     pub cash_out_delay_ticks: u64,
-    pub payout_basis_points: u16,
     pub platform_fee_basis_points: u16,
 }
 
@@ -180,6 +189,9 @@ pub struct EconomyStateWire {
     pub ticket_inflow_nanos: u64,
     pub payouts_nanos: u64,
     pub platform_fees_nanos: u64,
+    pub floor_liquidity_ratio_ppm: u64,
+    pub starvation_tax_numerator: u64,
+    pub inheritance_tax_basis_points: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -296,6 +308,18 @@ mod tests {
             BotMessage::CancelCashOut
         ));
         assert!(serde_json::from_str::<BotMessage>(r#"{"type":"input","x":1}"#).is_err());
+    }
+
+    #[test]
+    fn eliminated_message_includes_collision_reference() {
+        let message = ServerMessage::Eliminated {
+            reason: "bodyCollision".to_owned(),
+            final_worth_nanos: 5_000_000_000,
+            ticket_nanos: 5_000_000_000,
+            collision_id: Some(42),
+        };
+        let value = serde_json::to_value(message).unwrap();
+        assert_eq!(value["collisionId"], 42);
     }
 
     #[test]

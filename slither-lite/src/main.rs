@@ -1,7 +1,9 @@
 mod games;
 
+use axum::http::Method;
 use axum::{Router, routing::get};
 use tower_http::{
+    cors::{Any, CorsLayer},
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
@@ -23,6 +25,14 @@ async fn main() {
         .route("/health", get(|| async { "ok" }))
         .merge(snake_routes)
         .fallback_service(static_files)
+        // The site measures ping to every region with `/health` and reads the chosen region's
+        // `/config`, both cross-origin. They are public, read-only and credential-free, so any
+        // origin may read them; sockets are gated separately by the WebSocket origin check.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET]),
+        )
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(address)

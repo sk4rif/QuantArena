@@ -1,0 +1,21 @@
+# /etc/caddy/Caddyfile — HTTPS in front of the arenas on ONE regional host.
+# Caddy fetches and renews certificates automatically once DNS points at this server and
+# ports 80 and 443 are open. WebSockets (/ws, /bot) pass through reverse_proxy unchanged.
+#
+# Replace the hostnames with yours. Use the same file on every region, changing only the
+# region prefix (us-east, eu-west, ap-southeast).
+
+us-east.quantarena.example {
+	reverse_proxy 127.0.0.1:3001
+}
+
+# Only on the host that also serves the website (any one region; US East here). Every
+# arena ships the same web/dist, so the site can be served by whichever host you like.
+play.quantarena.example {
+	reverse_proxy 127.0.0.1:3001
+}
+
+# When a real-money tier opens, give it its own hostname and port, e.g.:
+# us-east-casual.quantarena.example {
+# 	reverse_proxy 127.0.0.1:3002
+# }

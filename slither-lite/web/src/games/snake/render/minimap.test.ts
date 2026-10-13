@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { FoodWire } from "../net/protocol";
-import { aumWeightAt, buildMoneyGrid, economicHeatIntensity, spawnPoint } from "./minimap";
+import { aumWeightAt, buildMoneyGrid, economicHeatIntensity, minimapWorldPoint, spawnPoint } from "./minimap";
 
 function ball(id: number, x: number, y: number, valueNanos: number): FoodWire {
   return { id, x: x * 100, y: y * 100, radius: 500, valueNanos, color: 0 };
 }
+
+describe("minimapWorldPoint", () => {
+  it("maps the drawable minimap area into arena coordinates", () => {
+    expect(minimapWorldPoint(100, 100, 200, 200, 3_000)).toEqual({ x: 0, y: 0 });
+    expect(minimapWorldPoint(4, 4, 200, 200, 3_000)).toEqual({ x: -3_000, y: -3_000 });
+    expect(minimapWorldPoint(196, 196, 200, 200, 3_000)).toEqual({ x: 3_000, y: 3_000 });
+  });
+
+  it("ignores the padding outside the drawable map", () => {
+    expect(minimapWorldPoint(2, 100, 200, 200, 3_000)).toBeUndefined();
+  });
+});
 
 describe("buildMoneyGrid", () => {
   it("preserves total collectible value while aggregating concentration", () => {

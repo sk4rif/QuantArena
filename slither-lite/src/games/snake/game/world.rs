@@ -3,6 +3,8 @@ use std::{
     f32::consts::{PI, TAU},
 };
 
+use serde::Serialize;
+
 use crate::games::snake::{
     config::{
         ARENA_HALF_EXTENT, BASE_SPEED, BODY_SPACING, BOOST_SPEED, DIGEST_HISTORY, PROTOCOL_VERSION,
@@ -17,9 +19,12 @@ use crate::games::snake::{
 
 use super::{
     economy::{
-        BALL, BOOST_DENOMINATOR, BOOST_NUMERATOR, DENOMINATIONS, ExitReason, FormulaRemainder,
-        Ledger, MIN_EFFECTIVE_WORTH, Money, PAYOUT_BASIS_POINTS, PLATFORM_FEE_BASIS_POINTS,
-        Receipt, TAX_DENOMINATOR, TAX_NUMERATOR, Tier, boost_charge, split_rake, starvation_charge,
+        BOOST_DENOMINATOR, BOOST_NUMERATOR, ExitReason, FormulaRemainder,
+        INHERITANCE_TAX_MAX_BASIS_POINTS, INHERITANCE_TAX_MIN_BASIS_POINTS,
+        INITIAL_TREASURY_TICKETS, LIQUIDITY_RATIO_HIGH_PPM, LIQUIDITY_RATIO_LOW_PPM, Ledger,
+        MIN_EFFECTIVE_WORTH, Money, PLATFORM_FEE_BASIS_POINTS, Receipt, STARVATION_DENOMINATOR,
+        STARVATION_MAX_NUMERATOR, STARVATION_MIN_NUMERATOR, TaxSchedule, Tier, boost_charge,
+        split_rake, starvation_charge, tax_schedule,
     },
     entities::{BodyPoint, Food, Snake, Vec2},
     placement::{
@@ -33,11 +38,11 @@ const SPAWN_INVULNERABLE_TICKS: u16 = TICK_RATE * 2;
 const SNAKE_SPAWN_GRID: usize = 64;
 const INITIAL_BODY_POINTS: usize = 24;
 const SPAWN_BODY_RADIUS: f32 = BODY_SPACING * (INITIAL_BODY_POINTS as f32 + 1.0) / TAU;
-const BOOST_BATCH: Money = BALL;
-const MAX_GENERAL_DROPS_PER_TICK: usize = 256;
+const MAX_GENERAL_DROPS_PER_TICK: usize = 2;
 /// Extra distance beyond the head's pickup reach at which a boost ball is dropped when the snake has no body yet.
 const BOOST_DROP_GAP: f32 = 30.0;
 const MAX_RECEIPTS: usize = 1_024;
+const MAX_COLLISION_AUDITS: usize = 1_024;
 pub const CASH_OUT_DELAY_TICKS: u64 = TICK_RATE as u64 * 10;
 
 #[derive(Debug, Clone)]
@@ -49,11 +54,58 @@ struct Player {
     last_input_seq: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CollisionKind {
+    Body,
+    HeadToHead,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollisionAudit {
+    pub id: u64,
+    pub tick: u64,
+    pub kind: CollisionKind,
+    pub victim_id: EntityId,
+    pub other_snake_id: EntityId,
+    pub body_sample_id: Option<u64>,
+    pub victim_head_x: f32,
+    pub victim_head_y: f32,
+    pub contact_x: f32,
+    pub contact_y: f32,
+    pub distance: f32,
+    pub threshold: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Elimination {
     pub player_id: EntityId,
     pub reason: String,
     pub final_worth: Money,
+    pub collision_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CollisionEvidence {
+    kind: CollisionKind,
+    other_snake_id: EntityId,
+    body_sample_id: Option<u64>,
+    victim_head: Vec2,
+    contact: Vec2,
+    threshold: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeathCause {
+    reason: &'static str,
+    collision: Option<CollisionEvidence>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingCashOut {
+    completes_at_tick: u64,
+    inheritance_tax_basis_points: u16,
 }
 
 pub struct GameWorld {
@@ -63,13 +115,15 @@ pub struct GameWorld {
     next_entity_id: EntityId,
     next_sample_id: u64,
     next_receipt_id: u64,
+    next_collision_id: u64,
     players: BTreeMap<EntityId, Player>,
     snakes: BTreeMap<EntityId, Snake>,
     food: BTreeMap<EntityId, Food>,
     ledger: Ledger,
     boost_pending: Money,
-    cash_out_deadlines: BTreeMap<EntityId, u64>,
+    pending_cash_outs: BTreeMap<EntityId, PendingCashOut>,
     receipts: VecDeque<Receipt>,
+    collision_audits: VecDeque<CollisionAudit>,
     published_snakes: BTreeMap<EntityId, SnakeWire>,
     published_food: BTreeMap<EntityId, FoodWire>,
     digest_history: VecDeque<(u64, u64)>,
@@ -84,18 +138,20 @@ impl GameWorld {
             next_entity_id: 1,
             next_sample_id: 1,
             next_receipt_id: 1,
+            next_collision_id: 1,
             players: BTreeMap::new(),
             snakes: BTreeMap::new(),
             food: BTreeMap::new(),
             ledger: Ledger::default(),
             boost_pending: Money::ZERO,
-            cash_out_deadlines: BTreeMap::new(),
+            pending_cash_outs: BTreeMap::new(),
             receipts: VecDeque::new(),
+            collision_audits: VecDeque::new(),
             published_snakes: BTreeMap::new(),
             published_food: BTreeMap::new(),
             digest_history: VecDeque::new(),
         };
-        world.seed_treasury();
+        world.fund_initial_treasury();
         world.capture_published_state();
         world.record_digest();
         world.assert_conserved();
@@ -103,7 +159,7 @@ impl GameWorld {
     }
 
     #[cfg(test)]
-    fn seeded(_seed: u64) -> Self {
+    fn test_world() -> Self {
         Self::new(Tier::Casual)
     }
 
@@ -137,35 +193,45 @@ impl GameWorld {
         true
     }
 
-    pub fn request_cash_out(&mut self, id: EntityId) -> Option<u64> {
+    pub fn request_cash_out(&mut self, id: EntityId) -> Option<(u64, u16)> {
         if !self.snakes.contains_key(&id) {
             return None;
         }
-        Some(
-            *self
-                .cash_out_deadlines
-                .entry(id)
-                .or_insert(self.tick + CASH_OUT_DELAY_TICKS),
-        )
+        let inheritance_tax_basis_points = self.current_tax_schedule().inheritance_tax_basis_points;
+        let pending = *self.pending_cash_outs.entry(id).or_insert(PendingCashOut {
+            completes_at_tick: self.tick + CASH_OUT_DELAY_TICKS,
+            inheritance_tax_basis_points,
+        });
+        Some((
+            pending.completes_at_tick,
+            pending.inheritance_tax_basis_points,
+        ))
     }
 
     pub fn cancel_cash_out(&mut self, id: EntityId) -> bool {
-        self.cash_out_deadlines.remove(&id).is_some()
+        self.pending_cash_outs.remove(&id).is_some()
     }
 
     pub fn complete_cash_outs(&mut self) -> Vec<Receipt> {
         let due = self
-            .cash_out_deadlines
+            .pending_cash_outs
             .iter()
-            .filter_map(|(id, deadline)| (*deadline <= self.tick).then_some(*id))
+            .filter_map(|(id, pending)| {
+                (pending.completes_at_tick <= self.tick)
+                    .then_some((*id, pending.inheritance_tax_basis_points))
+            })
             .collect::<Vec<_>>();
-        due.into_iter().filter_map(|id| self.cash_out(id)).collect()
+        due.into_iter()
+            .filter_map(|(id, inheritance_tax_basis_points)| {
+                self.cash_out(id, inheritance_tax_basis_points)
+            })
+            .collect()
     }
 
-    fn cash_out(&mut self, id: EntityId) -> Option<Receipt> {
-        self.cash_out_deadlines.remove(&id);
+    fn cash_out(&mut self, id: EntityId, inheritance_tax_basis_points: u16) -> Option<Receipt> {
+        self.pending_cash_outs.remove(&id);
         let snake = self.snakes.remove(&id)?;
-        let split = split_rake(snake.worth);
+        let split = split_rake(snake.worth, inheritance_tax_basis_points);
         self.ledger.record_exit(split);
         let receipt = Receipt {
             id: self.next_receipt_id,
@@ -174,6 +240,8 @@ impl GameWorld {
             tier: self.tier,
             gross_nanos: split.gross.0,
             payout_nanos: split.payout.0,
+            inheritance_tax_nanos: split.inheritance_tax.0,
+            inheritance_tax_basis_points,
             platform_fee_nanos: split.platform_fee.0,
             reason: ExitReason::CashOut,
             tick: self.tick,
@@ -183,7 +251,6 @@ impl GameWorld {
         while self.receipts.len() > MAX_RECEIPTS {
             self.receipts.pop_front();
         }
-        self.emit_general_floor(MAX_GENERAL_DROPS_PER_TICK);
         self.assert_conserved();
         Some(receipt)
     }
@@ -219,6 +286,7 @@ impl GameWorld {
     pub fn tick(&mut self) -> Vec<Elimination> {
         self.tick += 1;
         let dt = 1.0 / f32::from(TICK_RATE);
+        let starvation_numerator = self.current_tax_schedule().starvation_numerator;
         let ids = self.snakes.keys().copied().collect::<Vec<_>>();
         let mut new_samples = Vec::new();
         let mut boost_sources = Vec::new();
@@ -232,8 +300,12 @@ impl GameWorld {
                 snake.invulnerable_ticks -= 1;
             }
             let tick_start_worth = snake.worth;
-            let tax =
-                starvation_charge(tick_start_worth, &mut snake.tax_remainder).min(snake.worth);
+            let tax = starvation_charge(
+                tick_start_worth,
+                starvation_numerator,
+                &mut snake.tax_remainder,
+            )
+            .min(snake.worth);
             snake.worth = snake.worth.checked_sub(tax);
             self.ledger.transfer_to_floor(tax);
 
@@ -287,18 +359,28 @@ impl GameWorld {
         self.consume_food(&spatial);
         let mut deaths = self.detect_deaths(&spatial);
         for id in zero_worth {
-            deaths.insert(id, "zeroWorth");
+            deaths.insert(
+                id,
+                DeathCause {
+                    reason: "zeroWorth",
+                    collision: None,
+                },
+            );
         }
         let mut eliminations = Vec::new();
-        for (id, reason) in deaths {
-            self.cash_out_deadlines.remove(&id);
+        for (id, death) in deaths {
+            self.pending_cash_outs.remove(&id);
+            let collision_id = death
+                .collision
+                .map(|evidence| self.retain_collision(id, evidence));
             if let Some(snake) = self.snakes.remove(&id) {
                 let final_worth = snake.worth;
                 self.drop_snake_worth(&snake);
                 eliminations.push(Elimination {
                     player_id: id,
-                    reason: reason.to_owned(),
+                    reason: death.reason.to_owned(),
                     final_worth,
+                    collision_id,
                 });
             }
         }
@@ -367,13 +449,16 @@ impl GameWorld {
                     self.economy_state(),
                 )
             });
+        let pending_cash_out = self.pending_cash_outs.get(&player_id);
         Bootstrap {
             protocol: PROTOCOL_VERSION,
             player_id,
             tick_rate: TICK_RATE,
             publish_rate: PUBLISH_RATE,
             arena_half_extent: (ARENA_HALF_EXTENT * 100.0).round() as i32,
-            cash_out_completes_at_tick: self.cash_out_deadlines.get(&player_id).copied(),
+            cash_out_completes_at_tick: pending_cash_out.map(|pending| pending.completes_at_tick),
+            cash_out_inheritance_tax_basis_points: pending_cash_out
+                .map(|pending| pending.inheritance_tax_basis_points),
             tick: self.tick,
             sequence: self.sequence,
             digest: digest_to_hex(digest),
@@ -401,8 +486,53 @@ impl GameWorld {
         self.tier.ticket()
     }
 
+    fn retain_collision(&mut self, victim_id: EntityId, evidence: CollisionEvidence) -> u64 {
+        let id = self.next_collision_id;
+        self.next_collision_id = self
+            .next_collision_id
+            .checked_add(1)
+            .expect("collision ID exhausted");
+        let audit = CollisionAudit {
+            id,
+            tick: self.tick,
+            kind: evidence.kind,
+            victim_id,
+            other_snake_id: evidence.other_snake_id,
+            body_sample_id: evidence.body_sample_id,
+            victim_head_x: evidence.victim_head.x,
+            victim_head_y: evidence.victim_head.y,
+            contact_x: evidence.contact.x,
+            contact_y: evidence.contact.y,
+            distance: evidence
+                .victim_head
+                .distance_squared(evidence.contact)
+                .sqrt(),
+            threshold: evidence.threshold,
+        };
+        tracing::info!(
+            collision_id = audit.id,
+            tick = audit.tick,
+            kind = ?audit.kind,
+            victim_id = audit.victim_id,
+            other_snake_id = audit.other_snake_id,
+            body_sample_id = audit.body_sample_id,
+            victim_head_x = audit.victim_head_x,
+            victim_head_y = audit.victim_head_y,
+            contact_x = audit.contact_x,
+            contact_y = audit.contact_y,
+            distance = audit.distance,
+            threshold = audit.threshold,
+            "snake collision retained"
+        );
+        self.collision_audits.push_back(audit);
+        while self.collision_audits.len() > MAX_COLLISION_AUDITS {
+            self.collision_audits.pop_front();
+        }
+        id
+    }
+
     fn enter(&mut self, id: EntityId) {
-        self.cash_out_deadlines.remove(&id);
+        self.pending_cash_outs.remove(&id);
         self.ledger.record_ticket(self.tier.ticket());
         self.spawn_snake(id);
         self.assert_conserved();
@@ -507,7 +637,7 @@ impl GameWorld {
                 let Some(item) = self.food.get(&food_id) else {
                     continue;
                 };
-                let reach = snake.radius(self.tier.ticket()) + item.radius();
+                let reach = snake.radius(self.tier.ticket()) + item.pickup_radius(self.tier.coin());
                 if snake.position.distance_squared(item.position) <= reach * reach {
                     consumed.insert(food_id);
                     gains
@@ -527,7 +657,7 @@ impl GameWorld {
         }
     }
 
-    fn detect_deaths(&self, spatial: &SpatialIndex) -> BTreeMap<EntityId, &'static str> {
+    fn detect_deaths(&self, spatial: &SpatialIndex) -> BTreeMap<EntityId, DeathCause> {
         let mut dead = BTreeMap::new();
         let snakes = self.snakes.values().collect::<Vec<_>>();
         for left_index in 0..snakes.len() {
@@ -540,27 +670,64 @@ impl GameWorld {
                 if right.invulnerable_ticks == 0 {
                     let reach = left_radius + right.radius(self.tier.ticket());
                     if left.position.distance_squared(right.position) <= reach * reach {
+                        let left_death = DeathCause {
+                            reason: "headToHead",
+                            collision: Some(CollisionEvidence {
+                                kind: CollisionKind::HeadToHead,
+                                other_snake_id: right.id,
+                                body_sample_id: None,
+                                victim_head: left.position,
+                                contact: right.position,
+                                threshold: reach,
+                            }),
+                        };
+                        let right_death = DeathCause {
+                            reason: "headToHead",
+                            collision: Some(CollisionEvidence {
+                                kind: CollisionKind::HeadToHead,
+                                other_snake_id: left.id,
+                                body_sample_id: None,
+                                victim_head: right.position,
+                                contact: left.position,
+                                threshold: reach,
+                            }),
+                        };
                         if left.worth == right.worth {
-                            dead.insert(left.id, "headToHead");
-                            dead.insert(right.id, "headToHead");
+                            dead.insert(left.id, left_death);
+                            dead.insert(right.id, right_death);
                         } else if left.worth < right.worth {
-                            dead.insert(left.id, "headToHead");
+                            dead.insert(left.id, left_death);
                         } else {
-                            dead.insert(right.id, "headToHead");
+                            dead.insert(right.id, right_death);
                         }
                     }
                 }
             }
-            for (owner_id, position) in spatial.nearby_body(left.position, left_radius + 48.0) {
+            for (owner_id, sample_id, position) in
+                spatial.nearby_body(left.position, left_radius + 48.0)
+            {
                 if left.id == owner_id {
                     continue;
                 }
                 let Some(owner) = self.snakes.get(&owner_id) else {
                     continue;
                 };
-                let reach = left_radius + owner.radius(self.tier.ticket()) * 0.7;
+                let reach = left_radius + owner.radius(self.tier.ticket());
                 if left.position.distance_squared(position) <= reach * reach {
-                    dead.insert(left.id, "bodyCollision");
+                    dead.insert(
+                        left.id,
+                        DeathCause {
+                            reason: "bodyCollision",
+                            collision: Some(CollisionEvidence {
+                                kind: CollisionKind::Body,
+                                other_snake_id: owner_id,
+                                body_sample_id: Some(sample_id),
+                                victim_head: left.position,
+                                contact: position,
+                                threshold: reach,
+                            }),
+                        },
+                    );
                     break;
                 }
             }
@@ -570,7 +737,7 @@ impl GameWorld {
 
     fn drop_snake_worth(&mut self, snake: &Snake) {
         self.ledger.transfer_to_floor(snake.worth);
-        let (balls, _) = decompose_greedy(snake.worth);
+        let (balls, _) = decompose_greedy(snake.worth, self.tier.coin());
         let path = std::iter::once(snake.position)
             .chain(snake.body.iter().rev().map(|point| point.position))
             .collect::<Vec<_>>();
@@ -586,10 +753,10 @@ impl GameWorld {
         }
     }
 
-    fn seed_treasury(&mut self) {
-        let amount = self.tier.ticket().checked_mul(20);
-        self.ledger.seed_treasury(amount);
-        let (balls, _) = treasury_denominations(amount);
+    fn fund_initial_treasury(&mut self) {
+        let amount = self.tier.ticket().checked_mul(INITIAL_TREASURY_TICKETS);
+        self.ledger.fund_initial_treasury(amount);
+        let (balls, _) = treasury_denominations(amount, self.tier.coin());
         let ball_count = balls.len();
         for (index, value) in balls.into_iter().enumerate() {
             let position = treasury_grid_position(index, ball_count);
@@ -603,17 +770,18 @@ impl GameWorld {
             self.boost_pending = Money::ZERO;
             return;
         }
+        let coin = self.tier.coin();
         let mut source_index = 0;
-        while self.boost_pending >= BOOST_BATCH {
+        while self.boost_pending >= coin {
             let id = sources[source_index % sources.len()];
             source_index += 1;
             let Some(snake) = self.snakes.get(&id) else {
                 break;
             };
             let position = boost_drop_position(snake, self.tier.ticket());
-            self.boost_pending = self.boost_pending.checked_sub(BOOST_BATCH);
-            self.ledger.emit_floor(BOOST_BATCH);
-            self.spawn_food_at(position, BALL, color_for_value(BALL));
+            self.boost_pending = self.boost_pending.checked_sub(coin);
+            self.ledger.emit_floor(coin);
+            self.spawn_food_at(position, coin, color_for_value(coin));
         }
     }
 
@@ -621,7 +789,7 @@ impl GameWorld {
         let position = self.floor_spawn_point().unwrap_or_default();
         for _ in 0..limit {
             let available = self.ledger.pending_floor.checked_sub(self.boost_pending);
-            let Some(value) = affordable_denomination(available) else {
+            let Some(value) = affordable_denomination(available, self.tier.coin()) else {
                 break;
             };
             self.ledger.emit_floor(value);
@@ -661,7 +829,7 @@ impl GameWorld {
     fn food_wires(&self) -> BTreeMap<EntityId, FoodWire> {
         self.food
             .iter()
-            .map(|(id, item)| (*id, item.to_wire()))
+            .map(|(id, item)| (*id, item.to_wire(self.tier.coin())))
             .collect()
     }
 
@@ -688,26 +856,34 @@ impl GameWorld {
             tier: self.tier.key().to_owned(),
             tier_label: self.tier.label().to_owned(),
             ticket_nanos: self.tier.ticket().0,
-            denominations_nanos: DENOMINATIONS.iter().map(|money| money.0).collect(),
+            denominations_nanos: vec![self.tier.coin().0],
             economy_tick_rate: TICK_RATE,
-            treasury_seed_nanos: self.tier.ticket().checked_mul(20).0,
+            initial_treasury_nanos: self.tier.ticket().checked_mul(INITIAL_TREASURY_TICKETS).0,
             minimum_effective_worth_nanos: MIN_EFFECTIVE_WORTH.0,
-            tax_numerator: TAX_NUMERATOR,
-            tax_denominator: TAX_DENOMINATOR,
+            liquidity_ratio_low_ppm: LIQUIDITY_RATIO_LOW_PPM,
+            liquidity_ratio_high_ppm: LIQUIDITY_RATIO_HIGH_PPM,
+            starvation_min_numerator: STARVATION_MIN_NUMERATOR,
+            starvation_max_numerator: STARVATION_MAX_NUMERATOR,
+            starvation_denominator: STARVATION_DENOMINATOR,
+            inheritance_tax_min_basis_points: INHERITANCE_TAX_MIN_BASIS_POINTS,
+            inheritance_tax_max_basis_points: INHERITANCE_TAX_MAX_BASIS_POINTS,
             boost_numerator: BOOST_NUMERATOR,
             boost_denominator: BOOST_DENOMINATOR,
             cash_out_delay_ticks: CASH_OUT_DELAY_TICKS,
-            payout_basis_points: PAYOUT_BASIS_POINTS,
             platform_fee_basis_points: PLATFORM_FEE_BASIS_POINTS,
         }
     }
 
     fn economy_state(&self) -> EconomyStateWire {
+        let schedule = self.current_tax_schedule();
         EconomyStateWire {
             pending_floor_nanos: self.ledger.pending_floor.0,
             ticket_inflow_nanos: self.ledger.ticket_inflow.0,
             payouts_nanos: self.ledger.payouts.0,
             platform_fees_nanos: self.ledger.platform_fees.0,
+            floor_liquidity_ratio_ppm: schedule.floor_liquidity_ratio_ppm,
+            starvation_tax_numerator: schedule.starvation_numerator,
+            inheritance_tax_basis_points: schedule.inheritance_tax_basis_points,
         }
     }
 
@@ -731,17 +907,30 @@ impl GameWorld {
         entries
     }
 
+    fn live_worth(&self) -> Money {
+        self.snakes
+            .values()
+            .fold(Money::ZERO, |total, snake| total.checked_add(snake.worth))
+    }
+
+    fn visible_floor_worth(&self) -> Money {
+        self.food
+            .values()
+            .fold(Money::ZERO, |total, item| total.checked_add(item.value))
+    }
+
+    fn current_tax_schedule(&self) -> TaxSchedule {
+        tax_schedule(
+            self.live_worth(),
+            self.visible_floor_worth()
+                .checked_add(self.ledger.pending_floor),
+        )
+    }
+
     fn assert_conserved(&self) {
-        let live = self
-            .snakes
-            .values()
-            .fold(Money::ZERO, |total, snake| total.checked_add(snake.worth));
-        let floor = self
-            .food
-            .values()
-            .fold(Money::ZERO, |total, item| total.checked_add(item.value));
         assert!(
-            self.ledger.is_conserved(live, floor),
+            self.ledger
+                .is_conserved(self.live_worth(), self.visible_floor_worth()),
             "economy conservation invariant failed"
         );
     }
@@ -831,7 +1020,7 @@ mod tests {
 
     #[test]
     fn spectator_gets_an_identity_without_entering_the_economy() {
-        let mut world = GameWorld::seeded(1);
+        let mut world = GameWorld::test_world();
         let ticket_inflow = world.ledger.ticket_inflow;
         let snake_count = world.snakes.len();
         let player_count = world.players.len();
@@ -849,7 +1038,7 @@ mod tests {
 
     #[test]
     fn empty_arena_spawns_at_center() {
-        let world = GameWorld::seeded(2);
+        let world = GameWorld::test_world();
 
         let spawn = world.safe_spawn_position();
 
@@ -859,7 +1048,7 @@ mod tests {
 
     #[test]
     fn spawn_maximizes_distance_from_heads_and_body_points() {
-        let mut world = GameWorld::seeded(3);
+        let mut world = GameWorld::test_world();
         let id = world.join("Existing".into(), "green".into());
         let snake = world.snakes.get_mut(&id).unwrap();
         snake.position = Vec2 { x: 0.0, y: 0.0 };
@@ -898,7 +1087,7 @@ mod tests {
 
     #[test]
     fn spawned_snake_is_circular_and_faces_arena_center() {
-        let mut world = GameWorld::seeded(4);
+        let mut world = GameWorld::test_world();
         world.join("Existing".into(), "green".into());
 
         let id = world.join("Circular".into(), "blue".into());
@@ -924,7 +1113,7 @@ mod tests {
 
     #[test]
     fn movement_wraps_across_the_square_edge_without_elimination() {
-        let mut world = GameWorld::seeded(2);
+        let mut world = GameWorld::test_world();
         let id = world.join("Wrapper".into(), "green".into());
         let snake = world.snakes.get_mut(&id).unwrap();
         snake.position = Vec2 {
@@ -940,7 +1129,7 @@ mod tests {
 
     #[test]
     fn collisions_and_pickups_work_across_the_wrap_seam() {
-        let mut world = GameWorld::seeded(3);
+        let mut world = GameWorld::test_world();
         let left = world.join("Left".into(), "green".into());
         let right = world.join("Right".into(), "blue".into());
         world.snakes.get_mut(&left).unwrap().position = Vec2 {
@@ -955,14 +1144,20 @@ mod tests {
         world.snakes.get_mut(&right).unwrap().invulnerable_ticks = 0;
         let spatial = SpatialIndex::build(&world.snakes, &world.food);
         let deaths = world.detect_deaths(&spatial);
-        assert_eq!(deaths.get(&left), Some(&"headToHead"));
-        assert_eq!(deaths.get(&right), Some(&"headToHead"));
+        assert_eq!(
+            deaths.get(&left).map(|death| death.reason),
+            Some("headToHead")
+        );
+        assert_eq!(
+            deaths.get(&right).map(|death| death.reason),
+            Some("headToHead")
+        );
 
         world.snakes.get_mut(&right).unwrap().invulnerable_ticks = 1;
         let worth = world.snakes.get(&left).unwrap().worth;
-        world.snakes.get_mut(&left).unwrap().worth = worth.checked_sub(BALL);
-        world.ledger.transfer_to_floor(BALL);
-        world.ledger.emit_floor(BALL);
+        world.snakes.get_mut(&left).unwrap().worth = worth.checked_sub(Tier::Casual.coin());
+        world.ledger.transfer_to_floor(Tier::Casual.coin());
+        world.ledger.emit_floor(Tier::Casual.coin());
         let ball_id = world.next_entity_id();
         world.food.insert(
             ball_id,
@@ -972,7 +1167,7 @@ mod tests {
                     x: ARENA_HALF_EXTENT - 5.0,
                     y: 0.0,
                 },
-                value: BALL,
+                value: Tier::Casual.coin(),
                 color: 1,
             },
         );
@@ -984,21 +1179,143 @@ mod tests {
     }
 
     #[test]
+    fn body_collision_boundary_matches_full_visible_radii() {
+        let mut world = GameWorld::test_world();
+        let victim = world.join("Victim".into(), "green".into());
+        let owner = world.join("Owner".into(), "blue".into());
+        let victim_radius = world
+            .snakes
+            .get(&victim)
+            .unwrap()
+            .radius(world.tier.ticket());
+        let owner_radius = world
+            .snakes
+            .get(&owner)
+            .unwrap()
+            .radius(world.tier.ticket());
+        let reach = victim_radius + owner_radius;
+        let victim_snake = world.snakes.get_mut(&victim).unwrap();
+        victim_snake.position = Vec2::default();
+        victim_snake.body.clear();
+        victim_snake.invulnerable_ticks = 0;
+        let owner_snake = world.snakes.get_mut(&owner).unwrap();
+        owner_snake.position = Vec2 { x: 500.0, y: 0.0 };
+        owner_snake.body.clear();
+        owner_snake.body.push_back(BodyPoint {
+            id: 999,
+            position: Vec2 {
+                x: reach - 0.1,
+                y: 0.0,
+            },
+        });
+
+        let spatial = SpatialIndex::build(&world.snakes, &world.food);
+        let deaths = world.detect_deaths(&spatial);
+        assert_eq!(
+            deaths.get(&victim).map(|death| death.reason),
+            Some("bodyCollision")
+        );
+
+        world.snakes.get_mut(&owner).unwrap().body[0].position = Vec2 {
+            x: reach + 0.1,
+            y: 0.0,
+        };
+        let spatial = SpatialIndex::build(&world.snakes, &world.food);
+        let deaths = world.detect_deaths(&spatial);
+        assert!(!deaths.contains_key(&victim));
+    }
+
+    #[test]
+    fn body_collision_retains_auditable_evidence_and_returns_its_reference() {
+        let mut world = GameWorld::test_world();
+        let victim = world.join("Victim".into(), "green".into());
+        let owner = world.join("Owner".into(), "blue".into());
+        let victim_snake = world.snakes.get_mut(&victim).unwrap();
+        victim_snake.position = Vec2::default();
+        victim_snake.angle = 0.0;
+        victim_snake.aim = 0.0;
+        victim_snake.body.clear();
+        victim_snake.invulnerable_ticks = 0;
+        let owner_snake = world.snakes.get_mut(&owner).unwrap();
+        owner_snake.position = Vec2 { x: 500.0, y: 0.0 };
+        owner_snake.angle = 0.0;
+        owner_snake.aim = 0.0;
+        owner_snake.body.clear();
+        owner_snake.body.push_back(BodyPoint {
+            id: 999,
+            position: Vec2 { x: 5.0, y: 0.0 },
+        });
+        owner_snake.invulnerable_ticks = 0;
+
+        let events = world.tick();
+        let elimination = events
+            .iter()
+            .find(|event| event.player_id == victim)
+            .unwrap();
+        let collision_id = elimination.collision_id.unwrap();
+        let audit = world
+            .collision_audits
+            .iter()
+            .find(|audit| audit.id == collision_id)
+            .unwrap();
+
+        assert_eq!(elimination.reason, "bodyCollision");
+        assert_eq!(audit.tick, 1);
+        assert_eq!(audit.kind, CollisionKind::Body);
+        assert_eq!(audit.victim_id, victim);
+        assert_eq!(audit.other_snake_id, owner);
+        assert_eq!(audit.body_sample_id, Some(999));
+        assert_eq!(audit.victim_head_x, 5.0);
+        assert_eq!(audit.contact_x, 5.0);
+        assert_eq!(audit.distance, 0.0);
+        assert!(audit.threshold > 0.0);
+    }
+
+    #[test]
+    fn collision_audit_history_is_bounded() {
+        let mut world = GameWorld::test_world();
+        for victim_id in 1..=MAX_COLLISION_AUDITS as u32 + 1 {
+            world.retain_collision(
+                victim_id,
+                CollisionEvidence {
+                    kind: CollisionKind::Body,
+                    other_snake_id: 9_999,
+                    body_sample_id: Some(u64::from(victim_id)),
+                    victim_head: Vec2::default(),
+                    contact: Vec2::default(),
+                    threshold: 1.0,
+                },
+            );
+        }
+
+        assert_eq!(world.collision_audits.len(), MAX_COLLISION_AUDITS);
+        assert_eq!(world.collision_audits.front().unwrap().id, 2);
+        assert_eq!(
+            world.collision_audits.back().unwrap().id,
+            MAX_COLLISION_AUDITS as u64 + 1
+        );
+    }
+
+    #[test]
     fn collecting_ball_moves_value_without_minting() {
-        let mut world = GameWorld::seeded(3);
+        let mut world = GameWorld::test_world();
         let id = world.join("Eater".into(), "green".into());
         let position = world.snakes.get(&id).unwrap().position;
         let ball_id = world.next_entity_id();
-        world.snakes.get_mut(&id).unwrap().worth =
-            world.snakes.get(&id).unwrap().worth.checked_sub(BALL);
-        world.ledger.transfer_to_floor(BALL);
-        world.ledger.emit_floor(BALL);
+        world.snakes.get_mut(&id).unwrap().worth = world
+            .snakes
+            .get(&id)
+            .unwrap()
+            .worth
+            .checked_sub(Tier::Casual.coin());
+        world.ledger.transfer_to_floor(Tier::Casual.coin());
+        world.ledger.emit_floor(Tier::Casual.coin());
         world.food.insert(
             ball_id,
             Food {
                 id: ball_id,
                 position,
-                value: BALL,
+                value: Tier::Casual.coin(),
                 color: 1,
             },
         );
@@ -1009,8 +1326,40 @@ mod tests {
     }
 
     #[test]
+    fn food_glow_is_the_pickup_hitbox() {
+        let mut world = GameWorld::test_world();
+        let id = world.join("Eater".into(), "green".into());
+        let position = world.snakes.get(&id).unwrap().position;
+        let ball_id = world.next_entity_id();
+        world.snakes.get_mut(&id).unwrap().worth = world
+            .snakes
+            .get(&id)
+            .unwrap()
+            .worth
+            .checked_sub(Tier::Casual.coin());
+        world.ledger.transfer_to_floor(Tier::Casual.coin());
+        world.ledger.emit_floor(Tier::Casual.coin());
+        world.food.insert(
+            ball_id,
+            Food {
+                id: ball_id,
+                position: Vec2 {
+                    x: position.x + 25.0,
+                    y: position.y,
+                },
+                value: Tier::Casual.coin(),
+                color: 1,
+            },
+        );
+        let spatial = SpatialIndex::build(&world.snakes, &world.food);
+        world.consume_food(&spatial);
+        assert!(!world.food.contains_key(&ball_id));
+        world.assert_conserved();
+    }
+
+    #[test]
     fn floor_money_spawns_in_the_lowest_aum_weight_zone() {
-        let mut world = GameWorld::seeded(5);
+        let mut world = GameWorld::test_world();
         let a = world.join("A".into(), "green".into());
         let b = world.join("B".into(), "blue".into());
         world.snakes.get_mut(&a).unwrap().position = Vec2 { x: 1_000.0, y: 0.0 };
@@ -1020,8 +1369,8 @@ mod tests {
         };
         let before = world.food.len();
         let worth = world.snakes.get(&a).unwrap().worth;
-        world.snakes.get_mut(&a).unwrap().worth = worth.checked_sub(BALL);
-        world.ledger.transfer_to_floor(BALL);
+        world.snakes.get_mut(&a).unwrap().worth = worth.checked_sub(Tier::Casual.coin());
+        world.ledger.transfer_to_floor(Tier::Casual.coin());
         let spawn = world.floor_spawn_point().unwrap();
         // Both snakes sit on the +x side, so the emptiest zone is on the -x side.
         assert!(spawn.x < -1_000.0);
@@ -1035,16 +1384,13 @@ mod tests {
 
     #[test]
     fn boost_batch_creates_one_ball() {
-        let mut world = GameWorld::seeded(4);
+        let mut world = GameWorld::test_world();
         let id = world.join("Boost".into(), "red".into());
-        world.snakes.get_mut(&id).unwrap().worth = world
-            .snakes
-            .get(&id)
-            .unwrap()
-            .worth
-            .checked_sub(BOOST_BATCH);
-        world.boost_pending = BOOST_BATCH;
-        world.ledger.transfer_to_floor(BOOST_BATCH);
+        let coin = world.tier.coin();
+        world.snakes.get_mut(&id).unwrap().worth =
+            world.snakes.get(&id).unwrap().worth.checked_sub(coin);
+        world.boost_pending = coin;
+        world.ledger.transfer_to_floor(coin);
         let before = world.food.len();
         world.emit_boost_batches(&[id]);
         assert_eq!(world.food.len() - before, 1);
@@ -1054,7 +1400,7 @@ mod tests {
 
     #[test]
     fn death_distributes_all_worth_across_body_and_residual() {
-        let mut world = GameWorld::seeded(5);
+        let mut world = GameWorld::test_world();
         let id = world.join("Victim".into(), "blue".into());
         let snake = world.snakes.remove(&id).unwrap();
         let before_floor = world
@@ -1076,20 +1422,28 @@ mod tests {
 
     #[test]
     fn full_boost_ticks_preserve_conservation() {
-        let mut world = GameWorld::seeded(6);
+        let mut world = GameWorld::test_world();
         let id = world.join("Runner".into(), "purple".into());
         let start = world.snakes.get(&id).unwrap().worth;
+        let initial_food = world.food.clone();
         world.input(id, 1, 0.0, true);
         for _ in 0..120 {
             world.tick();
         }
-        assert!(world.snakes.get(&id).unwrap().worth < start);
+        let end = world.snakes.get(&id).unwrap().worth;
+        let ambient_pickups = initial_food
+            .iter()
+            .filter(|(id, _)| !world.food.contains_key(id))
+            .fold(Money::ZERO, |total, (_, item)| {
+                total.checked_add(item.value)
+            });
+        assert!(end < start.checked_add(ambient_pickups));
         world.assert_conserved();
     }
 
     #[test]
     fn boosting_has_a_real_net_cost() {
-        let mut boosted = GameWorld::seeded(6);
+        let mut boosted = GameWorld::test_world();
         let boosted_id = boosted.join("Runner".into(), "purple".into());
         let start = boosted.snakes.get(&boosted_id).unwrap().worth;
         let initial_food = boosted.food.clone();
@@ -1118,7 +1472,7 @@ mod tests {
 
     #[test]
     fn zero_worth_eliminates_and_requires_reentry() {
-        let mut world = GameWorld::seeded(7);
+        let mut world = GameWorld::test_world();
         let id = world.join("Empty".into(), "orange".into());
         let transferred = world.tier.ticket().checked_sub(Money(1));
         world.snakes.get_mut(&id).unwrap().worth = Money(1);
@@ -1135,14 +1489,54 @@ mod tests {
     }
 
     #[test]
-    fn cash_out_waits_ten_seconds_and_reentry_is_conserved() {
-        let mut world = GameWorld::seeded(6);
-        let id = world.join("Exit".into(), "yellow".into());
-        let deadline = world.request_cash_out(id).unwrap();
-        assert_eq!(deadline, CASH_OUT_DELAY_TICKS);
+    fn inheritance_waits_until_the_tick_after_entry_and_emits_two_balls() {
+        let mut world = GameWorld::test_world();
+        let exiting = world.join("Exit".into(), "yellow".into());
+        world.tick();
+        let food_before = world.food.keys().copied().collect::<BTreeSet<_>>();
+
+        let receipt = world
+            .cash_out(exiting, INHERITANCE_TAX_MAX_BASIS_POINTS)
+            .unwrap();
+        assert!(receipt.inheritance_tax_nanos >= world.tier.coin().checked_mul(2).0);
         assert_eq!(
-            world.bootstrap(id, "test").cash_out_completes_at_tick,
-            Some(deadline)
+            world.food.keys().copied().collect::<BTreeSet<_>>(),
+            food_before
+        );
+
+        let entering = world.join("Enter".into(), "green".into());
+        assert_eq!(
+            world.food.keys().copied().collect::<BTreeSet<_>>(),
+            food_before
+        );
+
+        world.tick();
+        let spawned = world
+            .food
+            .iter()
+            .filter_map(|(id, item)| (!food_before.contains(id)).then_some(item))
+            .collect::<Vec<_>>();
+        let entrant = world.snakes.get(&entering).unwrap();
+        assert_eq!(spawned.len(), MAX_GENERAL_DROPS_PER_TICK);
+        assert!(
+            spawned
+                .iter()
+                .all(|item| item.position.distance_squared(entrant.position) > 1_000.0 * 1_000.0)
+        );
+        world.assert_conserved();
+    }
+
+    #[test]
+    fn cash_out_waits_ten_seconds_and_reentry_is_conserved() {
+        let mut world = GameWorld::test_world();
+        let id = world.join("Exit".into(), "yellow".into());
+        let (deadline, inheritance_tax_basis_points) = world.request_cash_out(id).unwrap();
+        assert_eq!(deadline, CASH_OUT_DELAY_TICKS);
+        let bootstrap = world.bootstrap(id, "test");
+        assert_eq!(bootstrap.cash_out_completes_at_tick, Some(deadline));
+        assert_eq!(
+            bootstrap.cash_out_inheritance_tax_basis_points,
+            Some(inheritance_tax_basis_points)
         );
         for _ in 1..CASH_OUT_DELAY_TICKS {
             world.tick();
@@ -1151,9 +1545,30 @@ mod tests {
         }
         world.tick();
         let final_worth = world.snakes.get(&id).unwrap().worth;
+        let floor_before = world
+            .visible_floor_worth()
+            .checked_add(world.ledger.pending_floor);
         let receipts = world.complete_cash_outs();
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].gross_nanos, final_worth.0);
+        assert_eq!(
+            receipts[0].payout_nanos
+                + receipts[0].inheritance_tax_nanos
+                + receipts[0].platform_fee_nanos,
+            final_worth.0
+        );
+        assert!(receipts[0].inheritance_tax_nanos > 0);
+        assert!(receipts[0].platform_fee_nanos > 0);
+        assert_eq!(
+            world
+                .visible_floor_worth()
+                .checked_add(world.ledger.pending_floor),
+            floor_before.checked_add(Money(receipts[0].inheritance_tax_nanos))
+        );
+        assert_eq!(
+            world.ledger.platform_fees,
+            Money(receipts[0].platform_fee_nanos)
+        );
         assert!(!world.snakes.contains_key(&id));
         assert!(world.reenter(id));
         assert_eq!(
@@ -1165,7 +1580,7 @@ mod tests {
 
     #[test]
     fn pending_cash_out_can_be_canceled_and_death_prevents_payout() {
-        let mut world = GameWorld::seeded(7);
+        let mut world = GameWorld::test_world();
         let id = world.join("Patient".into(), "yellow".into());
         world.request_cash_out(id).unwrap();
         assert!(world.cancel_cash_out(id));
@@ -1204,7 +1619,7 @@ mod tests {
 
     #[test]
     fn disconnect_abandons_snake_until_natural_elimination() {
-        let mut world = GameWorld::seeded(8);
+        let mut world = GameWorld::test_world();
         let id = world.join("Drop".into(), "red".into());
         world.input(id, 1, 0.0, true);
         let start_position = world.snakes.get(&id).unwrap().position;
@@ -1238,24 +1653,78 @@ mod tests {
     }
 
     #[test]
+    fn simultaneous_cash_outs_lock_the_request_snapshot() {
+        let mut world = GameWorld::test_world();
+        let first = world.join("First".into(), "blue".into());
+        let second = world.join("Second".into(), "green".into());
+        let (_, first_rate) = world.request_cash_out(first).unwrap();
+        let (_, second_rate) = world.request_cash_out(second).unwrap();
+        world
+            .pending_cash_outs
+            .get_mut(&first)
+            .unwrap()
+            .completes_at_tick = world.tick + 1;
+        world
+            .pending_cash_outs
+            .get_mut(&second)
+            .unwrap()
+            .completes_at_tick = world.tick + 1;
+        for index in 0..8 {
+            world.join(format!("Entrant {index}"), "purple".into());
+        }
+
+        assert_eq!(first_rate, second_rate);
+        assert_ne!(
+            world.current_tax_schedule().inheritance_tax_basis_points,
+            first_rate
+        );
+        assert!(world.tick().is_empty());
+        let expected_rate = first_rate;
+        let receipts = world.complete_cash_outs();
+
+        assert_eq!(receipts.len(), 2);
+        assert!(
+            receipts
+                .iter()
+                .all(|receipt| receipt.inheritance_tax_basis_points == expected_rate)
+        );
+        world.assert_conserved();
+    }
+
+    #[test]
     fn disconnected_snake_completes_pending_cash_out_if_alive() {
-        let mut world = GameWorld::seeded(9);
+        let mut world = GameWorld::test_world();
         let id = world.join("Patient".into(), "blue".into());
         world.request_cash_out(id).unwrap();
-        world.cash_out_deadlines.insert(id, world.tick + 1);
+        world
+            .pending_cash_outs
+            .get_mut(&id)
+            .unwrap()
+            .completes_at_tick = world.tick + 1;
 
         assert!(world.disconnect(id));
-        assert_eq!(world.cash_out_deadlines.get(&id), Some(&1));
+        assert_eq!(
+            world
+                .pending_cash_outs
+                .get(&id)
+                .map(|pending| pending.completes_at_tick),
+            Some(1)
+        );
         assert!(world.tick().is_empty());
         let final_worth = world.snakes.get(&id).unwrap().worth;
         let receipts = world.complete_cash_outs();
 
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].player_id, id);
-        assert_eq!(receipts[0].payout_nanos, final_worth.0);
+        assert_eq!(
+            receipts[0].payout_nanos
+                + receipts[0].inheritance_tax_nanos
+                + receipts[0].platform_fee_nanos,
+            final_worth.0
+        );
         assert!(!world.players.contains_key(&id));
         assert!(!world.snakes.contains_key(&id));
-        assert_eq!(world.ledger.payouts, final_worth);
+        assert_eq!(world.ledger.payouts, Money(receipts[0].payout_nanos));
         world.assert_conserved();
     }
 }

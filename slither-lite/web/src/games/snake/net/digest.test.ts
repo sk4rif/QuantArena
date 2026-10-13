@@ -22,11 +22,14 @@ const economy: EconomyStateWire = {
   ticketInflowNanos: 5_000_000_000,
   payoutsNanos: 0,
   platformFeesNanos: 0,
+  floorLiquidityRatioPpm: 500_000,
+  starvationTaxNumerator: 60_969,
+  inheritanceTaxBasisPoints: 1_100,
 };
 
 describe("stateDigest", () => {
   it("matches the canonical Rust fixture", () => {
-    expect(stateDigest([snake], [first, second], economy)).toBe("748a7b255b049176");
+    expect(stateDigest([snake], [first, second], economy)).toBe("482f1f709e0b180f");
   });
 
   it("sorts entities by ID", () => {

@@ -24,7 +24,7 @@ async def run(url: str, name: str) -> None:
     import websockets
 
     async with websockets.connect(url) as ws:
-        await ws.send(json.dumps({"type": "join", "protocol": 4, "name": name}))
+        await ws.send(json.dumps({"type": "join", "protocol": 5, "name": name}))
         me = None
         half_extent = 0.0
         ticket = 0

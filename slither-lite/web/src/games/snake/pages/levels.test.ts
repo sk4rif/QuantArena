@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { playPath } from "../../../site/routes";
+import { playPath, spectatePath } from "../../../site/routes";
 import { snakeGame } from "..";
 import { renderLevels } from "./levels";
 
@@ -11,6 +11,13 @@ describe("renderLevels", () => {
       const href = `href="${playPath(game.id, level.key)}"`;
       if (level.availability === "open") expect(html).toContain(href);
       else expect(html).not.toContain(href);
+    }
+  });
+
+  it("offers spectator access to every open level", () => {
+    const html = renderLevels("snake");
+    for (const level of snakeGame.levels.filter((item) => item.availability === "open")) {
+      expect(html).toContain(`href="${spectatePath(snakeGame.id, level.key)}">Spectate</a>`);
     }
   });
 

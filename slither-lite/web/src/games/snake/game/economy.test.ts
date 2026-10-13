@@ -8,28 +8,51 @@ const config: EconomyConfigWire = {
   ticketNanos: 5_000_000_000,
   denominationsNanos: [],
   economyTickRate: 30,
-  treasurySeedNanos: 100_000_000_000,
+  initialTreasuryNanos: 80_000_000_000,
   minimumEffectiveWorthNanos: 5_000_000_000,
-  taxNumerator: 5,
-  taxDenominator: 100_000,
+  liquidityRatioLowPpm: 250_000,
+  liquidityRatioHighPpm: 650_000,
+  starvationMinNumerator: 25_672,
+  starvationMaxNumerator: 96_266,
+  starvationDenominator: 1_000_000_000,
+  inheritanceTaxMinBasisPoints: 200,
+  inheritanceTaxMaxBasisPoints: 2_000,
   boostNumerator: 2_667,
   boostDenominator: 2_000_000,
   cashOutDelayTicks: 300,
-  payoutBasisPoints: 9_500,
-  platformFeeBasisPoints: 500,
+  platformFeeBasisPoints: 200,
+};
+
+const economy = {
+  pendingFloorNanos: 0,
+  ticketInflowNanos: 5_000_000_000,
+  payoutsNanos: 0,
+  platformFeesNanos: 0,
+  floorLiquidityRatioPpm: 450_000,
+  starvationTaxNumerator: 60_969,
+  inheritanceTaxBasisPoints: 1_100,
 };
 
 describe("calculateSnakeEconomyMetrics", () => {
   it("matches the 30 Hz Casual formula rates", () => {
-    const metrics = calculateSnakeEconomyMetrics(5_000_000_000, true, config);
-    expect(metrics.taxPerSecondNanos).toBe(7_500_000);
+    const metrics = calculateSnakeEconomyMetrics(5_000_000_000, true, config, economy);
+    expect(metrics.taxPerTickNanos).toBe(304_845);
+    expect(metrics.taxPerSecondNanos).toBe(9_145_350);
+    expect(metrics.starvationHalfLifeSeconds).toBeGreaterThan(300);
+    expect(metrics.starvationHalfLifeSeconds).toBeLessThan(420);
     expect(metrics.boostPerSecondNanos).toBe(200_025_000);
-    expect(metrics.currentBurnPerSecondNanos).toBe(207_525_000);
-    expect(metrics.cashOutValueNanos).toBe(4_750_000_000);
+    expect(metrics.currentBurnPerSecondNanos).toBe(209_170_350);
+    expect(metrics.floorLiquidityRatioPpm).toBe(450_000);
+    expect(metrics.regimePosition).toBe(0.5);
+    expect(metrics.inheritanceTaxBasisPoints).toBe(1_100);
+    expect(metrics.inheritanceTaxNanos).toBe(550_000_000);
+    expect(metrics.platformFeeNanos).toBe(89_000_000);
+    expect(metrics.grossCashOutNanos).toBe(5_000_000_000);
+    expect(metrics.cashOutValueNanos).toBe(4_361_000_000);
   });
 
   it("excludes potential boost burn when boost is inactive", () => {
-    const metrics = calculateSnakeEconomyMetrics(5_000_000_000, false, config);
+    const metrics = calculateSnakeEconomyMetrics(5_000_000_000, false, config, economy);
     expect(metrics.currentBurnPerSecondNanos).toBe(metrics.taxPerSecondNanos);
   });
 });

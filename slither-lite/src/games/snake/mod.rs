@@ -4,7 +4,7 @@ mod game;
 mod net;
 mod protocol;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{Json, Router, routing::get};
 use net::session::{AppState, bot_ws_handler, ws_handler};
@@ -12,8 +12,15 @@ use net::session::{AppState, bot_ws_handler, ws_handler};
 pub fn routes() -> (SocketAddr, Router) {
     let config = config::ServerConfig::from_env();
     let address = config.bind_address;
-    tracing::info!(tier = config.tier.key(), ticket = %config.tier.ticket(), "snake economy configured");
+    tracing::info!(
+        tier = config.tier.key(),
+        ticket = %config.tier.ticket(),
+        region = %config.region,
+        allowed_origins = ?config.allowed_origins,
+        "snake economy configured"
+    );
     let public_config = serde_json::json!({
+        "region": config.region,
         "tier": config.tier.key(),
         "tierLabel": config.tier.label(),
         "ticketNanos": config.tier.ticket().0,
@@ -22,6 +29,7 @@ pub fn routes() -> (SocketAddr, Router) {
     });
     let state = AppState {
         world: game::spawn_world(config.tier),
+        allowed_origins: Arc::from(config.allowed_origins),
     };
     let routes = Router::new()
         .route(

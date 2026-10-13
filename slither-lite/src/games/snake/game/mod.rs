@@ -106,6 +106,7 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
                                 reason: elimination.reason,
                                 final_worth_nanos: elimination.final_worth.0,
                                 ticket_nanos: world.ticket().0,
+                                collision_id: elimination.collision_id,
                             });
                         }
                     }
@@ -157,10 +158,14 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
                         }
                         WorldCommand::CashOut { player_id, replica } => {
                             check_replica(&world, player_id, replica, &mut sessions);
-                            if let Some(completes_at_tick) = world.request_cash_out(player_id)
+                            if let Some((completes_at_tick, inheritance_tax_basis_points)) =
+                                world.request_cash_out(player_id)
                                 && let Some((sender, _)) = sessions.get(&player_id)
                             {
-                                let _ = sender.try_send(ServerMessage::CashOutPending { completes_at_tick });
+                                let _ = sender.try_send(ServerMessage::CashOutPending {
+                                    completes_at_tick,
+                                    inheritance_tax_basis_points,
+                                });
                             }
                         }
                         WorldCommand::CancelCashOut { player_id, replica } => {

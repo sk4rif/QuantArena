@@ -19,6 +19,10 @@ class Hasher {
     this.bytes(Uint8Array.of(value & 0xff));
   }
 
+  u16(value: number): void {
+    this.bytes(Uint8Array.of(value & 0xff, (value >>> 8) & 0xff));
+  }
+
   u32(value: number): void {
     this.bytes(Uint8Array.of(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff));
   }
@@ -57,6 +61,9 @@ export function stateDigest(
   hash.u64(economy.ticketInflowNanos);
   hash.u64(economy.payoutsNanos);
   hash.u64(economy.platformFeesNanos);
+  hash.u64(economy.floorLiquidityRatioPpm);
+  hash.u64(economy.starvationTaxNumerator);
+  hash.u16(economy.inheritanceTaxBasisPoints);
   hash.u32(sortedSnakes.length);
   for (const snake of sortedSnakes) {
     hash.u8(1);

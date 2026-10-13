@@ -12,6 +12,8 @@ root.innerHTML = `
     <div class="minimap-metrics">
       <div><span>Total AUM</span><strong id="map-total-aum">$0.00</strong></div>
       <div><span>Cash on floor</span><strong id="map-floor-cash">$0.00</strong></div>
+      <div><span>Pending floor</span><strong id="map-pending-floor">$0.00</strong></div>
+      <div><span>Floor liquidity / Total AUM</span><strong id="map-floor-cash-ratio">0.0%</strong></div>
     </div>
   </aside>
   <div id="overlay"></div>
@@ -30,6 +32,8 @@ export const canvas = requiredElement<HTMLCanvasElement>("#game");
 export const minimapCanvas = requiredElement<HTMLCanvasElement>("#minimap");
 export const mapTotalAum = requiredElement<HTMLElement>("#map-total-aum");
 export const mapFloorCash = requiredElement<HTMLElement>("#map-floor-cash");
+export const mapPendingFloor = requiredElement<HTMLElement>("#map-pending-floor");
+export const mapFloorCashRatio = requiredElement<HTMLElement>("#map-floor-cash-ratio");
 export const hud = requiredElement<HTMLDivElement>("#hud");
 export const overlay = requiredElement<HTMLDivElement>("#overlay");
 export const actionConfirmation = requiredElement<HTMLDivElement>("#action-confirmation");

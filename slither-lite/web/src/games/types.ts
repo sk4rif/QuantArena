@@ -2,6 +2,22 @@ export const NANOS_PER_DOLLAR = 1_000_000_000;
 
 export type Availability = "open" | "comingSoon";
 
+/** A geographic region that runs its own, independent copy of a level. */
+export interface Region {
+  /** Short slug that the server reports as `region` in `/config`, e.g. `us-east`. */
+  key: string;
+  label: string;
+  /** Where the servers physically are, shown next to the label, e.g. `New York`. */
+  location: string;
+}
+
+/** One running arena: a level in a region. Each is a separate server process with its own floor and leaderboard. */
+export interface LevelServer {
+  region: Region;
+  /** Origin serving that arena's `/config`, `/health`, `/ws` and `/bot`; empty string means the site's own origin. */
+  origin: string;
+}
+
 export interface Level {
   key: string;
   label: string;
@@ -9,7 +25,8 @@ export interface Level {
   money: "Paper" | "Real";
   blurb: string;
   availability: Availability;
-  origin: string;
+  /** Where the level is running. Never empty: an undeployed level falls back to the site's own origin. */
+  servers: readonly LevelServer[];
 }
 
 export interface ArenaHooks {
@@ -17,7 +34,10 @@ export interface ArenaHooks {
   requestSignIn(): void;
   signedIn(): boolean;
   level(): Level | undefined;
+  /** The arena to connect to; may wait briefly for ping measurements when the region is automatic. */
+  server(): Promise<LevelServer | undefined>;
   changeLevel(): void;
+  startAsSpectator(): boolean;
 }
 
 export interface GameRuntime {
@@ -37,6 +57,8 @@ export interface GameModule {
   availability: Availability;
   levels: readonly Level[];
   renderLevels(gameId: string | undefined): string;
+  /** Attaches behaviour (the region picker) to the HTML from `renderLevels`. */
+  bindLevels(root: HTMLElement): void;
   renderRules(): string;
   hydrateRules(root: HTMLElement): Promise<void>;
   renderDocs(): string;

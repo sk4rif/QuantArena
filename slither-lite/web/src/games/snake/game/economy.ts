@@ -1,4 +1,4 @@
-import type { EconomyConfigWire } from "../net/protocol";
+import type { EconomyConfigWire, EconomyStateWire } from "../net/protocol";
 
 interface WorthSample {
   tick: number;
@@ -33,9 +33,17 @@ export class WorthRateTracker {
 }
 
 export interface SnakeEconomyMetrics {
+  taxPerTickNanos: number;
   taxPerSecondNanos: number;
+  starvationHalfLifeSeconds: number;
   boostPerSecondNanos: number;
   currentBurnPerSecondNanos: number;
+  floorLiquidityRatioPpm: number;
+  regimePosition: number;
+  inheritanceTaxBasisPoints: number;
+  inheritanceTaxNanos: number;
+  platformFeeNanos: number;
+  grossCashOutNanos: number;
   cashOutValueNanos: number;
 }
 
@@ -43,17 +51,38 @@ export function calculateSnakeEconomyMetrics(
   worthNanos: number,
   boosting: boolean,
   config: EconomyConfigWire,
+  economy: EconomyStateWire,
 ): SnakeEconomyMetrics {
   const effectiveWorth = Math.max(worthNanos, config.minimumEffectiveWorthNanos);
-  const taxPerSecondNanos =
-    (effectiveWorth * config.taxNumerator * config.economyTickRate) / config.taxDenominator;
+  const taxPerTickNanos =
+    (effectiveWorth * economy.starvationTaxNumerator) / config.starvationDenominator;
+  const taxPerSecondNanos = taxPerTickNanos * config.economyTickRate;
+  const starvationRatePerTick = economy.starvationTaxNumerator / config.starvationDenominator;
+  const starvationHalfLifeSeconds =
+    Math.log(0.5) / Math.log1p(-starvationRatePerTick) / config.economyTickRate;
   const boostPerSecondNanos =
     (effectiveWorth * config.boostNumerator * config.economyTickRate) / config.boostDenominator;
-  const platformFee = Math.floor((worthNanos * config.platformFeeBasisPoints) / 10_000);
+  const ratioRange = config.liquidityRatioHighPpm - config.liquidityRatioLowPpm;
+  const normalizedRatio = Math.min(
+    1,
+    Math.max(0, (economy.floorLiquidityRatioPpm - config.liquidityRatioLowPpm) / ratioRange),
+  );
+  const regimePosition = normalizedRatio * normalizedRatio * (3 - 2 * normalizedRatio);
+  const inheritanceTaxNanos = Math.floor((worthNanos * economy.inheritanceTaxBasisPoints) / 10_000);
+  const afterInheritanceNanos = worthNanos - inheritanceTaxNanos;
+  const platformFeeNanos = Math.floor((afterInheritanceNanos * config.platformFeeBasisPoints) / 10_000);
   return {
+    taxPerTickNanos,
     taxPerSecondNanos,
+    starvationHalfLifeSeconds,
     boostPerSecondNanos,
     currentBurnPerSecondNanos: taxPerSecondNanos + (boosting ? boostPerSecondNanos : 0),
-    cashOutValueNanos: worthNanos - platformFee,
+    floorLiquidityRatioPpm: economy.floorLiquidityRatioPpm,
+    regimePosition,
+    inheritanceTaxBasisPoints: economy.inheritanceTaxBasisPoints,
+    inheritanceTaxNanos,
+    platformFeeNanos,
+    grossCashOutNanos: worthNanos,
+    cashOutValueNanos: afterInheritanceNanos - platformFeeNanos,
   };
 }

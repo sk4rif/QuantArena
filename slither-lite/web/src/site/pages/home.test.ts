@@ -14,6 +14,12 @@ describe("renderHome", () => {
     expect(renderHome()).toContain("QuantArena");
   });
 
+  it("links to the rules and API documentation from each game card", () => {
+    const html = renderHome();
+    expect(html).toContain('<a class="card-secondary" href="#/rules">Rules</a>');
+    expect(html).toContain('<a class="card-secondary" href="#/docs">API Docs</a>');
+  });
+
   it("summarises stakes from free rather than from the paper ticket", () => {
     expect(renderHome()).toContain("Free – $150.00");
   });

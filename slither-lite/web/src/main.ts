@@ -2,6 +2,7 @@ import "./site.css";
 import { auth } from "./auth";
 import { mountAuth } from "./auth/ui";
 import { findGame, findLevel, games, type GameModule, type Level } from "./games";
+import { resolveServer } from "./games/regions";
 import { renderAbout } from "./site/pages/about";
 import { renderHome } from "./site/pages/home";
 import { gamePath, navRoutesFor, parseLocation, playPath, type NavScope, type Route } from "./site/routes";
@@ -99,6 +100,7 @@ function navigate(): void {
   if (current === "play" && route !== "play") active?.game.runtime.leave();
 
   if (route === "game" && (!rendered.has("game") || section !== renderedGame)) renderGame(section);
+  if (route === "play" && active && current !== "play") startActiveGame();
   if (route !== current) show(route);
   document.title = title(route);
   if (route !== "play") scrollToSection(route, route === "game" ? undefined : section);
@@ -133,6 +135,23 @@ function currentGameId(): string {
   return currentGame().id;
 }
 
+function startActiveGame(): void {
+  active?.game.runtime.start({
+    accountName: () => auth.user?.displayName,
+    signedIn: () => auth.user !== null,
+    requestSignIn: () => accountUi.open("signIn"),
+    level: () => active?.level,
+    changeLevel: () => (location.hash = gamePath(active?.game.id ?? games[0]!.id)),
+    // `?region=eu-west` in the play link pins a region (handy for sharing); otherwise the saved choice or Auto applies.
+    server: () => (active ? resolveServer(active.game, active.level, hashParam("region")) : Promise.resolve(undefined)),
+    startAsSpectator: () => hashParam("spectate") === "1",
+  });
+}
+
+function hashParam(name: string): string | undefined {
+  return new URLSearchParams(location.hash.split("?")[1] ?? "").get(name) ?? undefined;
+}
+
 function render(route: Route): void {
   const view = views[route];
   if (route === "home") {
@@ -147,14 +166,6 @@ function render(route: Route): void {
     const game = currentGame();
     view.innerHTML = game.renderDocs();
     game.bindDocs(view);
-  } else if (route === "play" && active) {
-    active.game.runtime.start({
-      accountName: () => auth.user?.displayName,
-      signedIn: () => auth.user !== null,
-      requestSignIn: () => accountUi.open("signIn"),
-      level: () => active?.level,
-      changeLevel: () => (location.hash = gamePath(active?.game.id ?? games[0]!.id)),
-    });
   }
   rendered.add(route);
 }
@@ -162,6 +173,7 @@ function render(route: Route): void {
 function renderGame(gameId: string | undefined): void {
   const game = findGame(gameId);
   views.game.innerHTML = game ? game.renderLevels(gameId) : renderMissingGame();
+  game?.bindLevels(views.game);
   if (renderedGame !== gameId) {
     rendered.delete("rules");
     rendered.delete("docs");

@@ -62,3 +62,7 @@ export function gamePath(gameId: string): string {
 export function playPath(gameId: string, levelKey: string): string {
   return `#/play/${gameId}/${levelKey}`;
 }
+
+export function spectatePath(gameId: string, levelKey: string): string {
+  return `${playPath(gameId, levelKey)}?spectate=1`;
+}

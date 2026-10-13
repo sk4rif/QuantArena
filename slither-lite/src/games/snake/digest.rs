@@ -21,6 +21,10 @@ impl Hasher {
         self.bytes(&[value]);
     }
 
+    fn u16(&mut self, value: u16) {
+        self.bytes(&value.to_le_bytes());
+    }
+
     fn u32(&mut self, value: u32) {
         self.bytes(&value.to_le_bytes());
     }
@@ -51,6 +55,9 @@ pub fn state_digest(snakes: &[SnakeWire], food: &[FoodWire], economy: EconomySta
     hash.u64(economy.ticket_inflow_nanos);
     hash.u64(economy.payouts_nanos);
     hash.u64(economy.platform_fees_nanos);
+    hash.u64(economy.floor_liquidity_ratio_ppm);
+    hash.u64(economy.starvation_tax_numerator);
+    hash.u16(economy.inheritance_tax_basis_points);
     hash.u32(snakes.len() as u32);
     for snake in snakes {
         hash.u8(1);
@@ -129,9 +136,12 @@ mod tests {
             ticket_inflow_nanos: 5_000_000_000,
             payouts_nanos: 0,
             platform_fees_nanos: 0,
+            floor_liquidity_ratio_ppm: 500_000,
+            starvation_tax_numerator: 60_969,
+            inheritance_tax_basis_points: 1_100,
         };
         let digest = state_digest(std::slice::from_ref(&snake), &[first, second], economy);
-        assert_eq!(digest, 0x748a_7b25_5b04_9176);
+        assert_eq!(digest, 0x482f_1f70_9e0b_180f);
         assert_eq!(digest, state_digest(&[snake], &[second, first], economy));
     }
 }

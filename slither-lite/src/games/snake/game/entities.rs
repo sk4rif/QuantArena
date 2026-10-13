@@ -7,7 +7,9 @@ use crate::games::snake::{
     },
 };
 
-use super::economy::{BALL, FormulaRemainder, Money};
+use super::economy::{FormulaRemainder, Money};
+
+pub const FOOD_GLOW_RADIUS_MULTIPLIER: f32 = 2.8;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Vec2 {
@@ -109,17 +111,21 @@ pub struct Food {
 }
 
 impl Food {
-    pub fn radius(self) -> f32 {
-        let multiple = self.value.0 as f32 / BALL.0 as f32;
+    pub fn radius(self, coin: Money) -> f32 {
+        let multiple = self.value.0 as f32 / coin.0 as f32;
         4.0 + 2.0 * (multiple + 1.0).log2()
     }
 
-    pub fn to_wire(self) -> FoodWire {
+    pub fn pickup_radius(self, coin: Money) -> f32 {
+        self.radius(coin) * FOOD_GLOW_RADIUS_MULTIPLIER
+    }
+
+    pub fn to_wire(self, coin: Money) -> FoodWire {
         FoodWire {
             id: self.id,
             x: quantize_position(self.position.x),
             y: quantize_position(self.position.y),
-            radius: quantize_position(self.radius()),
+            radius: quantize_position(self.radius(coin)),
             value_nanos: self.value.0,
             color: self.color,
         }

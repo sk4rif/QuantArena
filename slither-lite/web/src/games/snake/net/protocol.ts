@@ -1,7 +1,8 @@
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const POSITION_SCALE = 100;
 export const ANGLE_SCALE = 10_000;
 export const NANOS_PER_DOLLAR = 1_000_000_000;
+export const FOOD_GLOW_RADIUS_MULTIPLIER = 2.8;
 
 export interface BodyPointWire {
   id: number;
@@ -58,14 +59,18 @@ export interface EconomyConfigWire {
   ticketNanos: number;
   denominationsNanos: number[];
   economyTickRate: number;
-  treasurySeedNanos: number;
+  initialTreasuryNanos: number;
   minimumEffectiveWorthNanos: number;
-  taxNumerator: number;
-  taxDenominator: number;
+  liquidityRatioLowPpm: number;
+  liquidityRatioHighPpm: number;
+  starvationMinNumerator: number;
+  starvationMaxNumerator: number;
+  starvationDenominator: number;
+  inheritanceTaxMinBasisPoints: number;
+  inheritanceTaxMaxBasisPoints: number;
   boostNumerator: number;
   boostDenominator: number;
   cashOutDelayTicks: number;
-  payoutBasisPoints: number;
   platformFeeBasisPoints: number;
 }
 
@@ -74,6 +79,9 @@ export interface EconomyStateWire {
   ticketInflowNanos: number;
   payoutsNanos: number;
   platformFeesNanos: number;
+  floorLiquidityRatioPpm: number;
+  starvationTaxNumerator: number;
+  inheritanceTaxBasisPoints: number;
 }
 
 export interface BootstrapMessage {
@@ -84,6 +92,7 @@ export interface BootstrapMessage {
   publishRate: number;
   arenaHalfExtent: number;
   cashOutCompletesAtTick: number | null;
+  cashOutInheritanceTaxBasisPoints: number | null;
   tick: number;
   sequence: number;
   digest: string;
@@ -119,11 +128,13 @@ export interface EliminatedMessage {
   reason: string;
   finalWorthNanos: number;
   ticketNanos: number;
+  collisionId: number | null;
 }
 
 export interface CashOutPendingMessage {
   type: "cashOutPending";
   completesAtTick: number;
+  inheritanceTaxBasisPoints: number;
 }
 
 export interface CashOutCanceledMessage {
@@ -138,6 +149,8 @@ export interface CashOutReceiptMessage {
   tier: "paper" | "casual" | "mid" | "standard" | "high" | "elite";
   grossNanos: number;
   payoutNanos: number;
+  inheritanceTaxNanos: number;
+  inheritanceTaxBasisPoints: number;
   platformFeeNanos: number;
   reason: "cashOut";
   tick: number;

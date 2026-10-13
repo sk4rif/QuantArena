@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gamePath, navRoutesFor, parseLocation, parseRoute, playPath } from "./routes";
+import { gamePath, navRoutesFor, parseLocation, parseRoute, playPath, spectatePath } from "./routes";
 
 describe("parseRoute", () => {
   it("maps known hashes to routes", () => {
@@ -44,6 +44,7 @@ describe("path builders", () => {
   it("round-trips through parseLocation", () => {
     expect(parseLocation(gamePath("snake"))).toEqual({ route: "game", section: "snake" });
     expect(parseLocation(playPath("snake", "mid"))).toEqual({ route: "play", section: "snake", detail: "mid" });
+    expect(parseLocation(spectatePath("snake", "mid"))).toEqual({ route: "play", section: "snake", detail: "mid" });
   });
 });
 

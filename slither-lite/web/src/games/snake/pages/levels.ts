@@ -1,5 +1,6 @@
 import { escapeHtml } from "../../../util/html";
-import { playPath } from "../../../site/routes";
+import { bindRegionPicker, renderRegionPicker } from "../../../site/regionPicker";
+import { playPath, spectatePath } from "../../../site/routes";
 import { isFree, stakeLabel, type GameModule, type Level } from "../../types";
 import { snakeGame } from "..";
 
@@ -24,6 +25,7 @@ export function renderLevels(gameId: string | undefined): string {
       <p class="lead">${escapeHtml(game.tagline)}. Choose the level you want to play.</p>
       <p class="hint">Levels share the rules and the API and differ only by the stake. Each one runs on its own server, so your worth, the leaderboard and the floor cash are separate per level.</p>
     </header>
+${renderRegionPicker(game)}
 
     <section id="levels-list">
       <h2>Levels</h2>
@@ -37,11 +39,19 @@ export function renderLevels(gameId: string | undefined): string {
   </article>`;
 }
 
+/** Wires up the interactive parts of the levels page. */
+export function bindLevels(root: HTMLElement): void {
+  bindRegionPicker(root, snakeGame);
+}
+
 function levelCard(game: GameModule, level: Level): string {
   const open = level.availability === "open";
   const free = isFree(level);
   const action = open
-    ? `<a class="btn btn-primary btn-block" href="${playPath(game.id, level.key)}">${free ? "Play" : `Enter for ${stakeLabel(level)}`}</a>`
+    ? `<div class="level-actions">
+        <a class="btn btn-primary btn-block" href="${playPath(game.id, level.key)}">${free ? "Play" : `Enter for ${stakeLabel(level)}`}</a>
+        <a class="btn btn-block" href="${spectatePath(game.id, level.key)}">Spectate</a>
+      </div>`
     : `<button class="btn btn-block" type="button" disabled>Coming soon</button>`;
   return `
     <div class="card card-level${open ? "" : " is-locked"}">

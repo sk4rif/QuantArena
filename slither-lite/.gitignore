@@ -2,3 +2,5 @@
 /web/node_modules
 /web/dist
 .DS_Store
+/deploy/out
+/backup-before-regions.tgz

@@ -1,0 +1,43 @@
+# One QuantArena arena per tier on this host: `systemctl enable --now slither@paper`.
+# The instance name (%i) is the tier. Region-wide settings live in /etc/slither/region.env,
+# per-tier settings (the local port) in /etc/slither/<tier>.env.
+#
+# The arena keeps all state in memory: a restart starts a fresh world, and any snakes
+# alive at that moment are lost. Restart deliberately, not on every deploy of the site.
+
+[Unit]
+Description=QuantArena arena (%i tier)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=slither
+Group=slither
+WorkingDirectory=/opt/slither
+Environment=SLITHER_TIER=%i
+Environment=RUST_LOG=slither_lite=info,tower_http=warn
+EnvironmentFile=/etc/slither/region.env
+EnvironmentFile=/etc/slither/%i.env
+ExecStart=/opt/slither/slither-lite
+Restart=always
+RestartSec=2
+LimitNOFILE=65536
+
+# Hardening: the server only needs to read its own files and listen on a local port.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

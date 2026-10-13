@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     extract::{
@@ -33,6 +36,8 @@ enum Endpoint {
 #[derive(Clone)]
 pub struct AppState {
     pub world: WorldHandle,
+    /// Site origins, besides this host and localhost, whose pages may open a socket here.
+    pub allowed_origins: Arc<[String]>,
 }
 
 pub async fn ws_handler(
@@ -40,7 +45,7 @@ pub async fn ws_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !origin_allowed(&headers) {
+    if !origin_allowed(&headers, &state.allowed_origins) {
         return (StatusCode::FORBIDDEN, "origin is not allowed").into_response();
     }
     ws.max_message_size(8 * 1024)
@@ -53,7 +58,7 @@ pub async fn bot_ws_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !origin_allowed(&headers) {
+    if !origin_allowed(&headers, &state.allowed_origins) {
         return (StatusCode::FORBIDDEN, "origin is not allowed").into_response();
     }
     ws.max_message_size(8 * 1024)
@@ -528,10 +533,17 @@ fn valid_skin(value: &str) -> bool {
     )
 }
 
-fn origin_allowed(headers: &HeaderMap) -> bool {
+/// Browsers always send `Origin` on a WebSocket upgrade, so this stops other websites from
+/// opening sockets with their visitors' browsers. Non-browser clients (bots) send none.
+/// A page may connect when it is served by this host, by localhost during development, or
+/// by one of the configured site origins (`SLITHER_ALLOWED_ORIGINS`) in a multi-region setup.
+fn origin_allowed(headers: &HeaderMap, allowed_origins: &[String]) -> bool {
     let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok()) else {
         return true;
     };
+    if allowed_origins.iter().any(|allowed| allowed == origin) {
+        return true;
+    }
     let Some(host) = headers.get(HOST).and_then(|value| value.to_str().ok()) else {
         return false;
     };
@@ -547,28 +559,68 @@ mod tests {
 
     #[test]
     fn joins_distinguish_browser_spectators_from_bots() {
-        let bot_join = r#"{"type":"join","protocol":4,"name":"alpha"}"#;
+        let bot_join = r#"{"type":"join","protocol":5,"name":"alpha"}"#;
         assert_eq!(
             parse_join(Endpoint::Bot, bot_join),
-            Some((4, "alpha".to_owned(), "blue".to_owned(), false))
+            Some((5, "alpha".to_owned(), "blue".to_owned(), false))
         );
         assert_eq!(parse_join(Endpoint::Browser, bot_join), None);
 
-        let player_join = r#"{"type":"join","protocol":4,"name":"alpha","skin":"red"}"#;
+        let player_join = r#"{"type":"join","protocol":5,"name":"alpha","skin":"red"}"#;
         assert_eq!(
             parse_join(Endpoint::Browser, player_join),
-            Some((4, "alpha".to_owned(), "red".to_owned(), false))
+            Some((5, "alpha".to_owned(), "red".to_owned(), false))
         );
         let spectator_join =
-            r#"{"type":"join","protocol":4,"name":"alpha","skin":"red","spectate":true}"#;
+            r#"{"type":"join","protocol":5,"name":"alpha","skin":"red","spectate":true}"#;
         assert_eq!(
             parse_join(Endpoint::Browser, spectator_join),
-            Some((4, "alpha".to_owned(), "red".to_owned(), true))
+            Some((5, "alpha".to_owned(), "red".to_owned(), true))
         );
         assert_eq!(
             parse_join(Endpoint::Bot, r#"{"type":"input","y":1,"x":1}"#),
             None
         );
+    }
+
+    fn headers(origin: Option<&str>, host: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, host.parse().unwrap());
+        if let Some(origin) = origin {
+            headers.insert(ORIGIN, origin.parse().unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn origins_allow_same_host_configured_sites_and_bots_only() {
+        let site = ["https://play.example.com".to_owned()];
+        let host = "eu.example.com";
+        assert!(origin_allowed(&headers(None, host), &[]));
+        assert!(origin_allowed(
+            &headers(Some("https://eu.example.com"), host),
+            &[]
+        ));
+        assert!(origin_allowed(
+            &headers(Some("http://localhost:5173"), host),
+            &[]
+        ));
+        assert!(!origin_allowed(
+            &headers(Some("https://play.example.com"), host),
+            &[]
+        ));
+        assert!(origin_allowed(
+            &headers(Some("https://play.example.com"), host),
+            &site
+        ));
+        assert!(!origin_allowed(
+            &headers(Some("https://evil.example"), host),
+            &site
+        ));
+        assert!(!origin_allowed(
+            &headers(Some("https://play.example.com.evil"), host),
+            &site
+        ));
     }
 
     #[test]

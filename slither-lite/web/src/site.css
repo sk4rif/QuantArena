@@ -121,14 +121,21 @@
 /* Game card: illustration on a tan panel above a light body with a red call to action. */
 .card-game { padding: 0; overflow: hidden; text-decoration: none; transition: border-color .15s, box-shadow .15s, transform .15s; }
 .card-game:hover { border-color: var(--accent-line); box-shadow: 0 10px 28px var(--shadow); transform: translateY(-2px); }
-.card-media { position: relative; display: grid; place-items: center; padding: 30px 0; border-bottom: 1px solid var(--border); background: var(--tan); }
+.card-media { position: relative; display: grid; place-items: center; padding: 30px 0; border-bottom: 1px solid var(--border); background: var(--tan); text-decoration: none; }
 .card-thumb { display: grid; place-items: center; width: 88px; height: 88px; border-radius: 12px; background: var(--bg); box-shadow: 0 1px 3px var(--shadow); }
+.card-media:has(.snake-card-preview) { height: 148px; padding: 0; }
+.card-thumb:has(.snake-card-preview) { width: 100%; height: 100%; border-radius: 0; background: transparent; box-shadow: none; }
+.snake-card-preview { width: 100%; height: 100%; }
 .card-tag { position: absolute; top: 12px; right: 12px; background: var(--bg); }
 .card-body { display: flex; flex: 1; flex-direction: column; padding: 18px 20px 20px; }
 .card-body p { color: var(--dim); line-height: 1.55; }
 .card-meta { margin-bottom: 16px !important; color: var(--dim); font-size: 13px !important; }
-.card-play { align-self: flex-end; margin-top: auto; padding: 9px 24px; color: var(--button-text); font-size: 14px; font-weight: 700; border: 2px solid var(--button-ring); border-radius: 999px; background: var(--button); transition: background-color .15s; }
-.card-game:hover .card-play { background: var(--button-hover); }
+.card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.card-secondary, .card-play { padding: 9px 16px; font-size: 14px; font-weight: 700; border-radius: 999px; text-decoration: none; }
+.card-secondary { color: var(--muted); border: 1px solid var(--border); background: var(--bg); transition: color .15s, border-color .15s, background-color .15s; }
+.card-secondary:hover { color: var(--accent-hover); border-color: var(--accent-line); background: var(--accent-soft); }
+.card-actions .card-play { padding-inline: 24px; color: var(--button-text); border: 2px solid var(--button-ring); background: var(--button); transition: background-color .15s; }
+.card-game:hover .card-play { color: var(--button-text); background: var(--button-hover); }
 .card-empty { border-style: dashed; box-shadow: none; }
 .card-empty .card-media { background: transparent; border-bottom-style: dashed; }
 .card-empty .card-thumb { background: var(--tan); box-shadow: none; }
@@ -138,6 +145,8 @@
 .level-stake { color: var(--text) !important; font-family: var(--serif); font-size: 30px !important; font-weight: 600; }
 .level-stake span { margin-left: 7px; color: var(--dim); font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
 .card .btn-block { margin-top: auto; padding: 10px; border-radius: 999px; text-align: center; text-decoration: none; }
+.level-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: auto; }
+.card .level-actions .btn-block { margin-top: 0; }
 /* A locked level is unavailable, not pending, so it must not read as a busy control. */
 .card .btn:disabled { color: var(--dim); background: var(--surface-3); opacity: 1; cursor: not-allowed; }
 .card a.btn-block { box-sizing: border-box; }
@@ -163,3 +172,16 @@
   .split { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .page { scroll-behavior: auto; } .card-game:hover { transform: none; } }
+
+/* Region picker on the levels page */
+.region-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 14px 0; }
+.region-option { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 12px 40px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); box-shadow: 0 1px 2px var(--shadow); cursor: pointer; transition: border-color .15s, background-color .15s; }
+.region-option:hover { border-color: var(--accent-line); }
+.region-option:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.region-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.region-option input { position: absolute; top: 14px; left: 14px; margin: 0; accent-color: var(--accent); }
+.region-name { color: var(--text); font-weight: 700; }
+.region-meta { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+.region-ping[data-quality="good"] { color: var(--money); font-weight: 700; }
+.region-ping[data-quality="fair"] { color: #a16207; font-weight: 700; }
+.region-ping[data-quality="poor"], .region-ping[data-quality="down"] { color: var(--danger); font-weight: 700; }

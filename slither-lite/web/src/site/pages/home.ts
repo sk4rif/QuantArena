@@ -28,20 +28,24 @@ export function renderHome(): string {
 function gameCard(game: GameModule): string {
   const range = stakeRange(game);
   const open = game.availability === "open";
-  // The card is a single link, so the call to action is a span rather than a nested anchor.
+  // The card uses separate links so its supporting material is reachable without entering the level selector.
   return `
-    <a class="card card-game" href="${gamePath(game.id)}"${open ? "" : ' aria-disabled="true"'}>
-      <div class="card-media">
+    <article class="card card-game">
+      <a class="card-media" href="${gamePath(game.id)}" aria-label="View ${escapeHtml(game.name)} levels"${open ? "" : ' aria-disabled="true"'}>
         <span class="card-thumb">${game.icon}</span>
         ${open ? "" : '<span class="tag card-tag">Coming soon</span>'}
-      </div>
+      </a>
       <div class="card-body">
         <h3>${escapeHtml(game.name)}</h3>
         <p>${escapeHtml(game.description)}</p>
         <p class="card-meta">${game.levels.length} levels · ${range}</p>
-        <span class="card-play">Play</span>
+        <div class="card-actions">
+          <a class="card-secondary" href="#/rules">Rules</a>
+          <a class="card-secondary" href="#/docs">API Docs</a>
+          <a class="card-play" href="${gamePath(game.id)}"${open ? "" : ' aria-disabled="true"'}>Play</a>
+        </div>
       </div>
-    </a>`;
+    </article>`;
 }
 
 /** Summarises what a game costs, treating paper levels as free rather than as their simulated ticket. */

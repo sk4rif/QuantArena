@@ -101,19 +101,59 @@ export function economicHeatIntensity(valueNanos: number, maximumNanos: number):
   return Math.sqrt(Math.min(1, valueNanos / maximumNanos));
 }
 
+export function minimapWorldPoint(
+  pointerX: number,
+  pointerY: number,
+  width: number,
+  height: number,
+  halfExtent: number,
+): Point | undefined {
+  const size = Math.min(width, height) - 8;
+  const left = (width - size) / 2;
+  const top = (height - size) / 2;
+  if (pointerX < left || pointerX > left + size || pointerY < top || pointerY > top + size) return undefined;
+  return {
+    x: (pointerX - left) / size * halfExtent * 2 - halfExtent,
+    y: (pointerY - top) / size * halfExtent * 2 - halfExtent,
+  };
+}
+
 export class Minimap {
   private readonly context: CanvasRenderingContext2D;
+  private navigationEnabled = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly replica: Replica,
+    private readonly onNavigate: (point: Point) => void,
   ) {
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Minimap Canvas 2D is unavailable");
     this.context = context;
     window.addEventListener("resize", this.render);
+    canvas.addEventListener("pointerdown", this.navigate);
     this.render();
   }
+
+  setNavigationEnabled(enabled: boolean): void {
+    this.navigationEnabled = enabled;
+    this.canvas.classList.toggle("interactive", enabled);
+  }
+
+  private readonly navigate = (event: PointerEvent): void => {
+    if (!this.navigationEnabled) return;
+    const bounds = this.canvas.getBoundingClientRect();
+    const point = minimapWorldPoint(
+      event.clientX - bounds.left,
+      event.clientY - bounds.top,
+      bounds.width,
+      bounds.height,
+      dequantizePosition(this.replica.arenaHalfExtent),
+    );
+    if (!point) return;
+    event.preventDefault();
+    this.onNavigate(point);
+  };
 
   readonly render = (): void => {
     const bounds = this.canvas.getBoundingClientRect();

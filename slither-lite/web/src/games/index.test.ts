@@ -20,6 +20,15 @@ describe("catalog", () => {
     expect(findLevel(game, "elite")?.availability).toBe("comingSoon");
   });
 
+  it("gives every level at least one server, each in a distinct region", () => {
+    for (const game of games) {
+      for (const level of game.levels) {
+        expect(level.servers.length).toBeGreaterThan(0);
+        expect(new Set(level.servers.map((server) => server.region.key)).size).toBe(level.servers.length);
+      }
+    }
+  });
+
   it("uses unique game and level ids", () => {
     expect(new Set(games.map((game) => game.id)).size).toBe(games.length);
     for (const game of games) {

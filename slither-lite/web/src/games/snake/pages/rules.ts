@@ -1,4 +1,5 @@
 import { escapeHtml } from "../../../util/html";
+import { endpointUrl, LOCAL_REGION } from "../../regions";
 import { isFree } from "../../types";
 import { snakeGame } from "..";
 import { formatMoney } from "../net/protocol";
@@ -34,7 +35,7 @@ export function renderRules(): string {
         <tbody>${tiers.map((tier) => `<tr><td>${tier.label}</td><td>${tier.ticket}</td><td>${tier.money || "&ndash;"}</td><td>${tier.status}</td></tr>`).join("")}</tbody>
       </table></div>
       <p>Entering costs one <strong>ticket</strong>, and the snake starts with a worth equal to that ticket. Re-entering after an elimination or a cash-out records a new ticket. New snakes are protected from collisions for 2 seconds. Spectating is free: it creates no snake, records no ticket, and lets you watch the live arena before entering.</p>
-      <p>When a server starts, its arena holds a treasury of 20 tickets, laid out as $0.50 balls (see <a href="#/rules/placement">Money placement</a>).</p>
+      <p>When a server starts, its arena holds a treasury of 16 tickets, laid out as coins worth 1% of the tier's ticket (see <a href="#/rules/placement">Money placement</a>).</p>
     </section>
 
     <section id="rules-controls">
@@ -53,7 +54,7 @@ export function renderRules(): string {
 
     <section id="rules-worth">
       <h2>Worth and growth</h2>
-      <p>Money is counted in nano-dollars ($1 = 1,000,000,000) with exact integer arithmetic, so rounding neither creates nor destroys money. There is a single ball denomination: every ball is worth <strong>$0.50</strong>. Collecting a ball adds its value to the snake's worth.</p>
+      <p>Money is counted in nano-dollars ($1 = 1,000,000,000) with exact integer arithmetic, so rounding neither creates nor destroys money. Each tier has a single ball denomination equal to <strong>1% of its ticket</strong> ($0.05 for a $5 ticket and $1.50 for a $150 ticket). Collecting a ball adds its value to the snake's worth.</p>
       <p>A snake's size is derived from its worth relative to the tier's ticket:</p>
       <pre class="formula">radius      = clamp(12 × √(worth / ticket), 10, 48)
 body points = clamp(round(24 × worth / ticket), 8, 1200)</pre>
@@ -62,12 +63,20 @@ body points = clamp(round(24 × worth / ticket), 8, 1200)</pre>
 
     <section id="rules-costs">
       <h2>Costs</h2>
-      <p>Two charges apply on every simulation tick, both computed from the worth at the start of the tick:</p>
-      <pre class="formula">effective_worth = max(worth, $5)
-starvation_tax  = effective_worth × 5 / 100,000              every tick
-boost_cost      = effective_worth × 2,667 / 2,000,000        only while boosting</pre>
-      <p>Charges are integer nano-dollar amounts. The fractional remainder is carried to the next tick, so nothing is lost to rounding. Both charges are taken out of the snake's worth and added to the server's <em>pending floor pool</em>.</p>
-      <p>At a worth of $5 or less, the starvation tax is $0.00025 per tick ($0.0075 per second) and the boost cost is $0.0066675 per tick ($0.20 per second). Boost cost also accumulates in a separate reserve; each time that reserve reaches $0.50, one $0.50 ball is created at the position of a boosting snake. On any tick in which no snake is boosting, the reserve is cleared and its money is released with the rest of the pending floor pool. A snake whose worth reaches zero is eliminated.</p>
+      <p>Starvation and inheritance taxes both fall as effective floor liquidity rises. Visible floor balls and money already committed to the pending floor pool both count:</p>
+      <pre class="formula">P = total live snake worth
+F = visible floor cash + pending floor cash
+r = F / (P + F)
+x = clamp((r − 0.25) / (0.65 − 0.25), 0, 1)
+q = x²(3 − 2x)
+
+starvation_rate = (96,266 − (96,266 − 25,672) × q) / 1,000,000,000 per tick
+inheritance_tax = 20% − (20% − 2%) × q</pre>
+      <p>There is no temporal smoothing: authoritative entries, pickups, deaths and exits affect the rates immediately. Smoothstep keeps the transition flat at the 25% and 65% boundaries. One starvation-rate snapshot applies to every snake in a tick. Each cash-out locks the current inheritance rate when its countdown starts.</p>
+      <p>Each tick uses <code>effective_worth = max(worth, $5)</code>. At or below a 25% ratio, starvation has an approximate four-minute worth half-life and inheritance tax is 20%; at or above 65%, starvation has an approximate fifteen-minute half-life and inheritance tax is 2%. Charges use integer nano-dollars and carry fractional remainders between ticks.</p>
+      <pre class="formula">starvation_tax = effective_worth × starvation_numerator / 1,000,000,000
+boost_cost     = effective_worth × 2,667 / 2,000,000        only while boosting</pre>
+      <p>Both charges move from the snake into the pending floor pool. Boost cost also accumulates in a separate reserve; each time that reserve reaches the tier's coin value, one coin is created at the position of a boosting snake. On any tick in which no snake is boosting, the reserve is cleared and its money is released with the rest of the pending floor pool. A snake whose worth reaches zero is eliminated.</p>
     </section>
 
     <section id="rules-death">
@@ -80,30 +89,37 @@ boost_cost      = effective_worth × 2,667 / 2,000,000        only while boostin
       </ul>
       <p>The arena has no walls: crossing its left, right, top or bottom edge wraps the snake to the opposite edge. Food pickup and snake collisions use the shortest wrapped distance, so entities on opposite sides of the map can interact across the seam.</p>
       <p>While a snake has spawn protection it cannot be eliminated by collisions, but its body still counts as an obstacle for other snakes.</p>
-      <p>When a snake is eliminated, its entire worth moves to the pending floor pool and <code>floor(worth / $0.50)</code> balls of $0.50 are created. They are spaced evenly along the snake's path, from its head to the end of its body. The part of the worth below $0.50 stays in the pending pool. The snake that caused the elimination receives nothing directly; balls are collected like any others.</p>
+      <p>When a snake is eliminated, its entire worth moves to the pending floor pool and <code>floor(worth / coin_value)</code> coins are created. They are spaced evenly along the snake's path, from its head to the end of its body. The part of the worth below one coin stays in the pending pool. The snake that caused the elimination receives nothing directly; balls are collected like any others.</p>
     </section>
 
     <section id="rules-cashout">
       <h2>Cash-out</h2>
       <p>Requesting a cash-out starts an authoritative <strong>10-second countdown</strong> (300 simulation ticks). The snake remains in the arena, can keep moving and boosting, continues paying charges, and remains fully vulnerable. The player may cancel at any time before completion.</p>
-      <div class="split two">
-        <div><strong>100%</strong><span>Payout to the player</span></div>
-        <div><strong>0%</strong><span>Platform fee</span></div>
+      <div class="split">
+        <div><strong>2–20%</strong><span>Inheritance tax returned to the game</span></div>
+        <div><strong>2%</strong><span>Platform fee voided after inheritance</span></div>
+        <div><strong>78.4–96.04%</strong><span>Final payout to the player</span></div>
       </div>
-      <p>If the snake survives until the completion tick, it is removed and paid based on its worth at that tick. There is currently no platform fee, so the receipt shows <code>payoutNanos = grossNanos</code> and <code>platformFeeNanos = 0</code>. The published economy configuration includes <code>cashOutDelayTicks</code> = 300, <code>payoutBasisPoints</code> = 10000 and <code>platformFeeBasisPoints</code> = 0.</p>
+      <p>When the countdown starts, the server locks the current inheritance rate and returns it to the player. That rate does not change during the countdown. If the snake survives until completion, the inheritance tax is calculated from its final worth, rounded down to whole nano-dollars, added to the pending floor pool and released as collectible coins. It is returned entirely to the game and none of it goes to the platform.</p>
+      <pre class="formula">inheritance = floor(gross × inheritance_basis_points / 10,000)
+after_tax  = gross − inheritance
+platform_fee = floor(after_tax × 2%)
+payout      = after_tax − platform_fee</pre>
+      <p>The 2% platform fee is calculated on the amount remaining after inheritance tax. While every tier uses simulated money, that fee is voided: it leaves the simulated economy and is not collected by the platform or returned to the floor. Before cash-out, the UI shows an estimate based on the current rate. During the countdown, it shows the locked rate and continuously updates the payout for the snake's changing worth. The authoritative receipt itemizes the exact amount returned to the game, the amount voided and the final payout.</p>
       <p>Dying during the countdown cancels the cash-out and redistributes the snake's worth normally. Closing the tab, navigating away, or losing the connection abandons the snake: boost turns off, it coasts in its last direction, and it remains vulnerable and keeps paying starvation tax. A pending cash-out remains active and pays if the abandoned snake survives to the completion tick, so disconnecting cannot remove it from an imminent collision.</p>
     </section>
 
     <section id="rules-placement">
       <h2>Money placement</h2>
-      <p>Money enters the arena in three ways: the initial treasury, the pending floor pool (starvation tax, boost cost and eliminated worth) and boost balls. Every placement follows explicit geometric rules with no random input.</p>
+      <p>Money enters the arena in three ways: the initial treasury, the pending floor pool (starvation tax, inheritance tax, boost cost and eliminated worth) and boost balls. Every placement follows explicit geometric rules derived only from public game state.</p>
 
       <h3>Pending floor pool release</h3>
       <p>After each tick's charges, the server releases the pool as balls:</p>
-      <pre class="formula">releasable = pending_floor − boost_reserve
-while releasable ≥ $0.50 and released_this_call &lt; 256:
-    create one $0.50 ball at the current lowest-AUM point
-    releasable −= $0.50</pre>
+      <pre class="formula">coin_value = ticket / 100
+releasable = pending_floor − boost_reserve
+while releasable ≥ coin_value and released_this_call &lt; 256:
+    create one coin at the current lowest-AUM point
+    releasable −= coin_value</pre>
       <p>This runs once per tick and once after every cash-out. All balls released in the same call use the same computed coordinate and intentionally stack.</p>
 
       <h3>The AUM weight map</h3>
@@ -122,28 +138,28 @@ spawn    = center with the lowest W(p)</pre>
       <p>Released floor balls receive no offset. Every ball is placed at the exact lowest-AUM coordinate computed for that release call, so multiple balls may occupy the same point.</p>
 
       <h3>Initial treasury grid</h3>
-      <p>The initial treasury uses a separate centered grid. Each coordinate represents $1 and receives two stacked $0.50 balls. Grid coordinates are 50 world units apart. The number of rows and columns is the closest exact rectangular factorization of the number of whole-dollar coordinates.</p>
-      <pre class="formula">coordinates = treasury / $1
-balls_at_each_coordinate = 2 × $0.50
-spacing = 50 world units
+      <p>The initial treasury uses a centered grid covering the full map. One coin is placed at each coordinate, with adjacent coordinates 150 world units apart. The centers run from −2,925 through 2,925 on each axis.</p>
+      <pre class="formula">positions_per_axis = 6,000 / 150 = 40
+coordinates = 40 × 40 = 1,600
+coins = 1,600 × 1% of ticket = 16 tickets
 
-$100 treasury → 100 coordinates → centered 10 × 10 grid</pre>
+Paper/Casual $80 · Mid $400 · Standard $800 · High $1,600 · Elite $2,400</pre>
 
       <h3>What does not use the spawn point</h3>
       <ul>
-        <li><strong>Boost balls:</strong> created at the position of a boosting snake, each time the boost reserve reaches $0.50. When several snakes are boosting, they take turns.</li>
+        <li><strong>Boost balls:</strong> created at the position of a boosting snake, each time the boost reserve reaches one coin. When several snakes are boosting, they take turns.</li>
         <li><strong>Elimination balls:</strong> created along the eliminated snake's path, as described in <a href="#/rules/death">Elimination</a>.</li>
       </ul>
 
-      <p>The seed (<code>placementSeed</code>) and rule version (<code>placementVersion</code>, currently 4) are published in the bootstrap's <code>economyConfig</code>. The spawn point can be computed from the public snake state. The exact scatter position of a released ball also depends on the counter <em>n</em> above, which is not published. The minimap marks the current spawn point with a pink crosshair.</p>
+      <p>The spawn point can be computed completely from the public snake state, and the treasury grid can be computed from <code>ticketNanos</code> and <code>initialTreasuryNanos</code>. The minimap marks the current spawn point with a pink crosshair.</p>
     </section>
 
     <section id="rules-ledger">
       <h2>Ledger</h2>
       <p>The server checks after every tick and every exit that money is conserved:</p>
-      <pre class="formula">ticket inflow + treasury seed
-    = live worth + floor balls + pending floor + payouts + platform fees</pre>
-      <p>The published <code>economy</code> object carries <code>pendingFloorNanos</code>, <code>ticketInflowNanos</code>, <code>payoutsNanos</code> and <code>platformFeesNanos</code> on every delta.</p>
+      <pre class="formula">ticket inflow + initial treasury
+    = live worth + floor balls + pending floor + payouts + voided platform fees</pre>
+      <p><code>platformFeesNanos</code> is the cumulative simulated amount removed from circulation, not platform revenue. The published <code>economy</code> object also carries <code>floorLiquidityRatioPpm</code>, <code>starvationTaxNumerator</code> and <code>inheritanceTaxBasisPoints</code> on every delta, allowing humans and bots to reproduce the current rates.</p>
     </section>
 
     <section id="rules-system">
@@ -162,10 +178,13 @@ export async function hydrateRules(root: ParentNode): Promise<void> {
   const target = root.querySelector<HTMLElement>("#rules-live");
   if (!target) return;
   try {
-    const response = await fetch("/config");
+    // The site may be served from a different host than the arenas, so ask the default level's first arena.
+    const server = snakeGame.levels.find((level) => level.availability === "open")?.servers[0];
+    const response = await fetch(endpointUrl(server?.origin ?? "", "/config"));
     if (!response.ok) return;
     const config = await response.json() as { tierLabel: string; ticketNanos: number };
-    target.innerHTML = `This server is running the <strong>${escapeHtml(config.tierLabel)}</strong> tier with a <strong>${formatMoney(config.ticketNanos)}</strong> ticket.`;
+    const subject = !server || server.region.key === LOCAL_REGION.key ? "This server" : `The ${escapeHtml(server.region.label)} server`;
+    target.innerHTML = `${subject} is running the <strong>${escapeHtml(config.tierLabel)}</strong> tier with a <strong>${formatMoney(config.ticketNanos)}</strong> ticket.`;
   } catch {
     // Offline docs are still useful without the live tier.
   }

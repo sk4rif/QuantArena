@@ -1,15 +1,19 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::games::snake::{config::ARENA_SIZE, protocol::EntityId};
+use crate::games::snake::{
+    config::ARENA_SIZE,
+    protocol::{EntityId, SampleId},
+};
 
 use super::entities::{Food, Snake, Vec2};
 
 const CELL_SIZE: f32 = 96.0;
+type BodyEntry = (EntityId, SampleId, Vec2);
 
 #[derive(Default)]
 pub struct SpatialIndex {
     food: HashMap<(i32, i32), Vec<EntityId>>,
-    body: HashMap<(i32, i32), Vec<(EntityId, Vec2)>>,
+    body: HashMap<(i32, i32), Vec<BodyEntry>>,
 }
 
 impl SpatialIndex {
@@ -24,11 +28,11 @@ impl SpatialIndex {
         }
         for snake in snakes.values() {
             for point in &snake.body {
-                index
-                    .body
-                    .entry(cell(point.position))
-                    .or_default()
-                    .push((snake.id, point.position));
+                index.body.entry(cell(point.position)).or_default().push((
+                    snake.id,
+                    point.id,
+                    point.position,
+                ));
             }
         }
         index
@@ -41,7 +45,7 @@ impl SpatialIndex {
             .collect()
     }
 
-    pub fn nearby_body(&self, position: Vec2, radius: f32) -> Vec<(EntityId, Vec2)> {
+    pub fn nearby_body(&self, position: Vec2, radius: f32) -> Vec<BodyEntry> {
         wrapped_query_positions(position)
             .flat_map(|position| query_cells(&self.body, position, radius))
             .flat_map(|items| items.iter().copied())
@@ -100,7 +104,7 @@ mod tests {
                     x: -2_998.0,
                     y: 0.0,
                 },
-                value: super::super::economy::BALL,
+                value: super::super::economy::Tier::Paper.coin(),
                 color: 1,
             },
         );

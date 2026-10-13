@@ -1,8 +1,18 @@
 import { escapeHtml } from "../../../util/html";
+import { endpointUrl, LOCAL_REGION } from "../../regions";
+import type { LevelServer } from "../../types";
+import { snakeGame } from "..";
 
-export function botUrl(): string {
-  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.host}/bot`;
+export function botUrl(origin = ""): string {
+  return endpointUrl(origin, "/bot", "ws");
+}
+
+/** Bot endpoints of the open levels, one per region; empty in a single-server setup. */
+function regionalEndpoints(): { server: LevelServer; levelLabel: string }[] {
+  return snakeGame.levels
+    .filter((level) => level.availability === "open")
+    .flatMap((level) => level.servers.map((server) => ({ server, levelLabel: level.label })))
+    .filter(({ server }) => server.region.key !== LOCAL_REGION.key);
 }
 
 function code(language: string, source: string): string {
@@ -14,7 +24,7 @@ import asyncio, json, math, websockets
 
 async def main():
     async with websockets.connect("__URL__") as ws:
-        await ws.send(json.dumps({"type": "join", "protocol": 4, "name": "my-bot"}))
+        await ws.send(json.dumps({"type": "join", "protocol": 5, "name": "my-bot"}))
         me, food = None, {}
         async for raw in ws:
             msg = json.loads(raw)
@@ -47,7 +57,7 @@ asyncio.run(main())
 const jsExample = `
 // Node 22+ or any browser: WebSocket is built in.
 const ws = new WebSocket("__URL__");
-ws.onopen = () => ws.send(JSON.stringify({ type: "join", protocol: 4, name: "my-bot" }));
+ws.onopen = () => ws.send(JSON.stringify({ type: "join", protocol: 5, name: "my-bot" }));
 
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
@@ -64,7 +74,7 @@ ws.onmessage = (event) => {
 `;
 
 const inputExamples = `
-{"type":"join","protocol":4,"name":"my-bot","skin":"blue"}
+{"type":"join","protocol":5,"name":"my-bot","skin":"blue"}
 {"type":"input","x":0.7,"y":-0.7,"boost":true}
 {"type":"cashOut"}
 {"type":"cancelCashOut"}
@@ -74,18 +84,19 @@ const inputExamples = `
 const bootstrapExample = `
 {
   "type": "bootstrap",
-  "protocol": 4,
+  "protocol": 5,
   "playerId": 201,
   "tickRate": 30,
   "publishRate": 15,
   "arenaHalfExtent": 300000,
   "cashOutCompletesAtTick": null,
+  "cashOutInheritanceTaxBasisPoints": null,
   "tick": 1842,
   "sequence": 921,
   "digest": "8a41d9c722ad30f1",
   "reason": "joined",
-  "economyConfig": { "tier": "paper", "ticketNanos": 5000000000, "...": "..." },
-  "economy": { "pendingFloorNanos": 0, "ticketInflowNanos": 5000000000, "payoutsNanos": 0, "platformFeesNanos": 0 },
+  "economyConfig": { "tier": "paper", "ticketNanos": 5000000000, "liquidityRatioLowPpm": 250000, "liquidityRatioHighPpm": 650000, "inheritanceTaxMinBasisPoints": 200, "inheritanceTaxMaxBasisPoints": 2000, "...": "..." },
+  "economy": { "pendingFloorNanos": 0, "ticketInflowNanos": 5000000000, "payoutsNanos": 0, "platformFeesNanos": 0, "floorLiquidityRatioPpm": 450000, "starvationTaxNumerator": 60969, "inheritanceTaxBasisPoints": 1100 },
   "snakes": [ { "id": 201, "name": "my-bot", "x": -41200, "y": 90311, "angle": 15708, "speed": 15000, "radius": 1200, "worthNanos": 5000000000, "lastInputSeq": 0, "body": [ { "id": 1, "x": -41200, "y": 90311 } ] } ],
   "food": [ { "id": 7, "x": 12000, "y": -5000, "radius": 600, "valueNanos": 10000000, "color": 0 } ],
   "leaderboard": [ { "id": 201, "name": "my-bot", "worthNanos": 5000000000 } ]
@@ -99,7 +110,18 @@ function table(headers: string[], rows: string[][]): string {
 }
 
 export function renderDocs(): string {
-  const url = botUrl();
+  const endpoints = regionalEndpoints();
+  const url = botUrl(endpoints[0]?.server.origin);
+  const endpointTable = endpoints.length > 1
+    ? `<p>Every region runs its own arena, so connect your bot to the region closest to where it runs:</p>${table(
+      ["Level", "Region", "Endpoint"],
+      endpoints.map(({ server, levelLabel }) => [
+        escapeHtml(levelLabel),
+        `${escapeHtml(server.region.label)}${server.region.location ? ` (${escapeHtml(server.region.location)})` : ""}`,
+        `<code class="inline-copy">${escapeHtml(botUrl(server.origin))}</code>`,
+      ]),
+    )}`
+    : "";
   return `
   <article class="doc">
     <header class="doc-hero">
@@ -132,6 +154,7 @@ export function renderDocs(): string {
         <li>The server replies with <code>bootstrap</code>: the complete state, your <code>playerId</code>, and the economy configuration.</li>
         <li>From then on you get <code>delta</code> messages, plus targeted events for your snake.</li>
       </ol>
+      ${endpointTable}
       <p>One connection controls one snake. Only a completed <code>cashOut</code> countdown pays. The countdown lasts 300 simulation ticks (10 seconds), can be canceled, and does not protect the snake. If the connection closes, control is permanently abandoned: boost turns off and the snake coasts in its last direction while remaining vulnerable and paying starvation tax. A pending cash-out still pays if the abandoned snake survives to completion; if it dies first, its worth is dropped along its body.</p>
     </section>
 
@@ -141,7 +164,7 @@ export function renderDocs(): string {
       ${table(
         ["type", "Fields", "Effect"],
         [
-          ["<code>join</code>", "<code>protocol</code> (must be <code>4</code>), <code>name</code> (1–20 letters, digits, space, <code>_</code> or <code>-</code>), <code>skin</code> optional: red, blue, green, purple, orange or yellow (default blue)", "Must be the first message. Answered with <code>bootstrap</code>."],
+          ["<code>join</code>", "<code>protocol</code> (must be <code>5</code>), <code>name</code> (1–20 letters, digits, space, <code>_</code> or <code>-</code>), <code>skin</code> optional: red, blue, green, purple, orange or yellow (default blue)", "Must be the first message. Answered with <code>bootstrap</code>."],
           ["<code>input</code>", "<code>x</code>, <code>y</code> numbers; <code>boost</code> boolean (optional, default false)", "Steer toward the direction (<code>x</code>, <code>y</code>). <code>y</code> grows downward, so <code>y = -1</code> is up. Only the direction matters, not the length. A zero or non-finite vector is rejected with <code>invalidVector</code>."],
           ["<code>cashOut</code>", "none", "Start the authoritative 10-second cash-out countdown. Answered with <code>cashOutPending</code>. The snake remains active and vulnerable until completion."],
           ["<code>cancelCashOut</code>", "none", "Cancel a pending countdown. Answered with <code>cashOutCanceled</code>."],
@@ -161,13 +184,13 @@ export function renderDocs(): string {
       ${table(
         ["type", "When", "Contents"],
         [
-          ["<code>bootstrap</code>", "After <code>join</code>, after <code>resync</code>, and after a slow-consumer overflow", "Complete state: <code>playerId</code>, <code>tickRate</code>, <code>publishRate</code>, <code>arenaHalfExtent</code>, <code>cashOutCompletesAtTick</code>, <code>tick</code>, <code>sequence</code>, <code>digest</code>, <code>reason</code>, <code>economyConfig</code>, <code>economy</code>, <code>snakes</code>, <code>food</code>, <code>leaderboard</code>."],
+          ["<code>bootstrap</code>", "After <code>join</code>, after <code>resync</code>, and after a slow-consumer overflow", "Complete state: <code>playerId</code>, <code>tickRate</code>, <code>publishRate</code>, <code>arenaHalfExtent</code>, <code>cashOutCompletesAtTick</code>, <code>cashOutInheritanceTaxBasisPoints</code>, <code>tick</code>, <code>sequence</code>, <code>digest</code>, <code>reason</code>, <code>economyConfig</code>, <code>economy</code>, <code>snakes</code>, <code>food</code>, <code>leaderboard</code>."],
           ["<code>delta</code>", "15 times per second", "<code>tick</code>, <code>sequence</code>, <code>digest</code>, <code>economy</code>, <code>snakesAdded</code>, <code>snakesUpdated</code>, <code>snakesRemoved</code>, <code>foodAdded</code>, <code>foodRemoved</code>, <code>leaderboard</code>."],
           ["<code>entered</code>", "After a successful <code>reenter</code>", "<code>ticketNanos</code>"],
-          ["<code>cashOutPending</code>", "After <code>cashOut</code>", "<code>completesAtTick</code>. The payout occurs only if the snake survives until that authoritative tick."],
+          ["<code>cashOutPending</code>", "After <code>cashOut</code>", "<code>completesAtTick</code> and the locked <code>inheritanceTaxBasisPoints</code>. The payout occurs only if the snake survives; the inheritance rate does not change during the countdown."],
           ["<code>cashOutCanceled</code>", "After a successful <code>cancelCashOut</code>", "No additional fields."],
-          ["<code>eliminated</code>", "Your snake died", "<code>reason</code> (<code>headToHead</code>, <code>bodyCollision</code>, <code>zeroWorth</code>), <code>finalWorthNanos</code>, <code>ticketNanos</code>"],
-          ["<code>cashOutReceipt</code>", "When the 10-second cash-out countdown completes", "<code>id</code>, <code>playerId</code>, <code>playerName</code>, <code>tier</code>, <code>grossNanos</code>, <code>payoutNanos</code>, <code>platformFeeNanos</code>, <code>reason</code>, <code>tick</code>. The platform fee is currently 0, so <code>payoutNanos</code> equals <code>grossNanos</code>."],
+          ["<code>eliminated</code>", "Your snake died", "<code>reason</code> (<code>headToHead</code>, <code>bodyCollision</code>, <code>zeroWorth</code>), <code>finalWorthNanos</code>, <code>ticketNanos</code>, and a server audit <code>collisionId</code> for collision deaths (<code>null</code> for zero worth)"],
+          ["<code>cashOutReceipt</code>", "When the 10-second cash-out countdown completes", "<code>id</code>, <code>playerId</code>, <code>playerName</code>, <code>tier</code>, <code>grossNanos</code>, <code>payoutNanos</code>, <code>inheritanceTaxNanos</code>, <code>inheritanceTaxBasisPoints</code>, <code>platformFeeNanos</code>, <code>reason</code> and <code>tick</code>. The inheritance tax is returned entirely to the game as pending floor money. The 2% platform fee is calculated after inheritance and, while money is simulated, is voided rather than collected or returned to the floor."],
           ["<code>pong</code>", "After <code>ping</code>", "<code>sentAt</code>"],
           ["<code>error</code>", "A request was rejected", "<code>code</code>, <code>message</code>. See <a href=\"#/docs/errors\">Errors</a>."],
         ],
@@ -198,7 +221,7 @@ export function renderDocs(): string {
           ["Time", "The world simulates at 30 ticks per second and publishes deltas at 15 per second. <code>tick</code> counts simulation ticks."],
         ],
       )}
-      <p>The <a href="#/rules">rules</a> page has the economy formulas. The constants your bot needs (ticket, ball denomination, tax and boost ratios, cash-out delay, payout and fee basis points, placement seed) are all in <code>economyConfig</code> of the bootstrap.</p>
+      <p>The <a href="#/rules">rules</a> page has the economy and placement formulas. Static thresholds and bounds are in bootstrap <code>economyConfig</code>. Every <code>economy</code> update publishes <code>floorLiquidityRatioPpm</code>, <code>starvationTaxNumerator</code> and <code>inheritanceTaxBasisPoints</code>. Starting a cash-out locks that rate, which is then returned in <code>cashOutPending</code> and pending bootstraps.</p>
     </section>
 
     <section id="docs-errors">
@@ -208,7 +231,7 @@ export function renderDocs(): string {
         ["code", "Meaning"],
         [
           ["<code>joinRequired</code>", "The first message was missing, late (over 8 s), or not a valid <code>join</code>."],
-          ["<code>protocolMismatch</code>", "<code>protocol</code> is not <code>4</code>."],
+          ["<code>protocolMismatch</code>", "<code>protocol</code> is not <code>5</code>."],
           ["<code>invalidName</code>", "Name is empty, longer than 20 characters, or contains unsafe characters."],
           ["<code>invalidSkin</code>", "Unknown skin."],
           ["<code>serverUnavailable</code>", "The game world is not accepting players."],

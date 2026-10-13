@@ -1,11 +1,11 @@
 use crate::games::snake::config::{ARENA_HALF_EXTENT, ARENA_SIZE};
 
-use super::economy::{BALL, Money};
+use super::economy::Money;
 
 use super::entities::Vec2;
 
-pub const TREASURY_GRID_SPACING: f32 = 50.0;
-pub const TREASURY_BALLS_PER_POINT: usize = 2;
+pub const TREASURY_GRID_SPACING: f32 = 150.0;
+pub const TREASURY_BALLS_PER_POINT: usize = 1;
 /// The spawn search scans a `SPAWN_GRID` x `SPAWN_GRID` grid laid over the arena.
 pub const SPAWN_GRID: usize = 64;
 /// Softening added to squared distance so a snake's weight stays finite at its own position.
@@ -55,7 +55,7 @@ pub fn treasury_grid_position(ball_index: usize, ball_count: usize) -> Vec2 {
     while (rows + 1) * (rows + 1) <= point_count {
         rows += 1;
     }
-    while point_count % rows != 0 {
+    while !point_count.is_multiple_of(rows) {
         rows -= 1;
     }
     let columns = point_count / rows;
@@ -68,18 +68,18 @@ pub fn treasury_grid_position(ball_index: usize, ball_count: usize) -> Vec2 {
     }
 }
 
-pub fn decompose_greedy(amount: Money) -> (Vec<Money>, Money) {
-    let count = amount.0 / BALL.0;
-    let residual = Money(amount.0 % BALL.0);
-    (vec![BALL; count as usize], residual)
+pub fn decompose_greedy(amount: Money, coin: Money) -> (Vec<Money>, Money) {
+    let count = amount.0 / coin.0;
+    let residual = Money(amount.0 % coin.0);
+    (vec![coin; count as usize], residual)
 }
 
-pub fn treasury_denominations(amount: Money) -> (Vec<Money>, Money) {
-    decompose_greedy(amount)
+pub fn treasury_denominations(amount: Money, coin: Money) -> (Vec<Money>, Money) {
+    decompose_greedy(amount, coin)
 }
 
-pub fn affordable_denomination(pool: Money) -> Option<Money> {
-    (pool >= BALL).then_some(BALL)
+pub fn affordable_denomination(pool: Money, coin: Money) -> Option<Money> {
+    (pool >= coin).then_some(coin)
 }
 
 fn wrapped_delta(value: f64) -> f64 {
@@ -90,10 +90,10 @@ fn wrapped_delta(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::games::snake::game::economy::Tier;
+    use crate::games::snake::game::economy::{INITIAL_TREASURY_TICKETS, Tier};
 
     #[test]
-    fn treasury_represents_twenty_tickets_exactly() {
+    fn treasury_represents_sixteen_tickets_exactly() {
         for tier in [
             Tier::Paper,
             Tier::Casual,
@@ -102,8 +102,8 @@ mod tests {
             Tier::High,
             Tier::Elite,
         ] {
-            let amount = tier.ticket().checked_mul(20);
-            let (balls, residual) = treasury_denominations(amount);
+            let amount = tier.ticket().checked_mul(INITIAL_TREASURY_TICKETS);
+            let (balls, residual) = treasury_denominations(amount, tier.coin());
             let represented = balls
                 .iter()
                 .fold(residual, |total, ball| total.checked_add(*ball));
@@ -159,20 +159,22 @@ mod tests {
     }
 
     #[test]
-    fn treasury_grid_places_two_balls_on_centered_ten_by_ten_coordinates() {
-        let positions = (0..200)
-            .map(|index| treasury_grid_position(index, 200))
+    fn treasury_grid_places_one_ball_on_each_full_map_coordinate() {
+        let positions = (0..1_600)
+            .map(|index| treasury_grid_position(index, 1_600))
             .collect::<Vec<_>>();
         let mut counts = std::collections::BTreeMap::new();
         for position in &positions {
-            *counts.entry((position.x as i32, position.y as i32)).or_insert(0) += 1;
+            *counts
+                .entry((position.x as i32, position.y as i32))
+                .or_insert(0) += 1;
         }
 
-        assert_eq!(counts.len(), 100);
-        assert!(counts.values().all(|count| *count == 2));
-        assert_eq!(positions.first().unwrap().x, -225.0);
-        assert_eq!(positions.first().unwrap().y, -225.0);
-        assert_eq!(positions.last().unwrap().x, 225.0);
-        assert_eq!(positions.last().unwrap().y, 225.0);
+        assert_eq!(counts.len(), 1_600);
+        assert!(counts.values().all(|count| *count == 1));
+        assert_eq!(positions.first().unwrap().x, -2_925.0);
+        assert_eq!(positions.first().unwrap().y, -2_925.0);
+        assert_eq!(positions.last().unwrap().x, 2_925.0);
+        assert_eq!(positions.last().unwrap().y, 2_925.0);
     }
 }
