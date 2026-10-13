@@ -92,8 +92,8 @@ export class Replica {
     for (const item of message.foodAdded) this.food.set(item.id, { ...item });
     this.tick = message.tick;
     this.sequence = message.sequence;
-    this.economy = { ...message.economy };
-    this.leaderboard = message.leaderboard.map((entry) => ({ ...entry }));
+    if (message.economy) this.economy = { ...message.economy };
+    if (message.leaderboard) this.leaderboard = message.leaderboard.map((entry) => ({ ...entry }));
     this.digest = stateDigest(this.snakes.values(), this.food.values(), this.economy);
     this.synchronized = this.digest === message.digest;
     return this.synchronized;

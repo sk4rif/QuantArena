@@ -126,6 +126,8 @@ pub struct GameWorld {
     collision_audits: VecDeque<CollisionAudit>,
     published_snakes: BTreeMap<EntityId, SnakeWire>,
     published_food: BTreeMap<EntityId, FoodWire>,
+    published_economy: Option<EconomyStateWire>,
+    published_leaderboard: Option<Vec<LeaderboardEntry>>,
     digest_history: VecDeque<(u64, u64)>,
 }
 
@@ -149,6 +151,8 @@ impl GameWorld {
             collision_audits: VecDeque::new(),
             published_snakes: BTreeMap::new(),
             published_food: BTreeMap::new(),
+            published_economy: None,
+            published_leaderboard: None,
             digest_history: VecDeque::new(),
         };
         world.fund_initial_treasury();
@@ -399,6 +403,7 @@ impl GameWorld {
 
         for (id, snake) in &current_snakes {
             match self.published_snakes.get(id) {
+                Some(previous) if snake_patch_is_noop(previous, snake) => {}
                 Some(previous) => snakes_updated.push(snake_patch(previous, snake)),
                 None => snakes_added.push(snake.clone()),
             }
@@ -419,21 +424,28 @@ impl GameWorld {
             }
         }
 
+        let economy = self.economy_state();
+        let leaderboard = self.leaderboard();
+        let economy_changed = self.published_economy != Some(economy);
+        let leaderboard_changed = self.published_leaderboard.as_ref() != Some(&leaderboard);
+
         self.sequence += 1;
         self.published_snakes = current_snakes;
         self.published_food = current_food;
+        self.published_economy = Some(economy);
+        self.published_leaderboard = Some(leaderboard.clone());
         let digest = self.record_digest();
         Delta {
             tick: self.tick,
             sequence: self.sequence,
             digest: digest_to_hex(digest),
-            economy: self.economy_state(),
+            economy: economy_changed.then_some(economy),
             snakes_added,
             snakes_updated,
             snakes_removed,
             food_added,
             food_removed,
-            leaderboard: self.leaderboard(),
+            leaderboard: leaderboard_changed.then_some(leaderboard),
         }
     }
 
@@ -836,6 +848,8 @@ impl GameWorld {
     fn capture_published_state(&mut self) {
         self.published_snakes = self.snake_wires();
         self.published_food = self.food_wires();
+        self.published_economy = Some(self.economy_state());
+        self.published_leaderboard = Some(self.leaderboard());
     }
 
     fn record_digest(&mut self) -> u64 {
@@ -952,6 +966,18 @@ impl GameWorld {
             .expect("sample ID exhausted");
         id
     }
+}
+
+/// A patch is a no-op when applying it would leave the replicated snake unchanged.
+fn snake_patch_is_noop(previous: &SnakeWire, current: &SnakeWire) -> bool {
+    previous.x == current.x
+        && previous.y == current.y
+        && previous.angle == current.angle
+        && previous.speed == current.speed
+        && previous.radius == current.radius
+        && previous.worth_nanos == current.worth_nanos
+        && previous.last_input_seq == current.last_input_seq
+        && previous.body == current.body
 }
 
 fn snake_patch(previous: &SnakeWire, current: &SnakeWire) -> SnakePatch {
@@ -1726,5 +1752,59 @@ mod tests {
         assert!(!world.snakes.contains_key(&id));
         assert_eq!(world.ledger.payouts, Money(receipts[0].payout_nanos));
         world.assert_conserved();
+    }
+
+    #[test]
+    fn last_input_is_held_until_a_newer_sequence_arrives() {
+        let mut world = GameWorld::test_world();
+        let id = world.join("Hold".into(), "red".into());
+        world.input(id, 1, 1.2, true);
+        let aim = world.snakes.get(&id).unwrap().aim;
+        let start = world.snakes.get(&id).unwrap().position;
+
+        assert!(world.tick().is_empty());
+        assert!(world.tick().is_empty());
+        let snake = world.snakes.get(&id).unwrap();
+        assert!(snake.boosting);
+        assert!((snake.aim - aim).abs() < 1e-5);
+        assert!(snake.position.distance_squared(start) > 0.0);
+        assert_eq!(snake.last_input_seq, 1);
+
+        world.input(id, 1, 0.2, false);
+        assert!(world.snakes.get(&id).unwrap().boosting);
+        assert!((world.snakes.get(&id).unwrap().aim - aim).abs() < 1e-5);
+
+        world.input(id, 2, 0.2, false);
+        let snake = world.snakes.get(&id).unwrap();
+        assert!(!snake.boosting);
+        assert!((snake.aim - normalize_angle(0.2)).abs() < 1e-5);
+        assert_eq!(snake.last_input_seq, 2);
+    }
+
+    #[test]
+    fn unchanged_snapshots_are_omitted_from_deltas() {
+        let mut world = GameWorld::test_world();
+        let id = world.join("Quiet".into(), "blue".into());
+        let first = world.publish_delta();
+        assert!(first.snakes_added.iter().any(|snake| snake.id == id));
+        assert!(first.economy.is_some());
+        assert!(first.leaderboard.is_some());
+
+        let second = world.publish_delta();
+        assert!(second.snakes_added.is_empty());
+        assert!(second.snakes_updated.is_empty());
+        assert!(second.economy.is_none());
+        assert!(second.leaderboard.is_none());
+        assert_eq!(second.digest, first.digest);
+        let quiet = serde_json::to_value(&second).unwrap();
+        assert!(quiet.get("economy").is_none());
+        assert!(quiet.get("leaderboard").is_none());
+
+        assert!(world.tick().is_empty());
+        let third = world.publish_delta();
+        assert!(third.snakes_updated.iter().any(|patch| patch.id == id));
+        assert!(third.economy.is_some());
+        assert!(third.leaderboard.is_some());
+        assert_ne!(third.digest, second.digest);
     }
 }

@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
+import fixtureFile from "./digest-fixtures.json";
 import { stateDigest } from "./digest";
 import type { EconomyStateWire, FoodWire, SnakeWire } from "./protocol";
+
+interface DigestCase {
+  name: string;
+  snakes: SnakeWire[];
+  food: FoodWire[];
+  economy: EconomyStateWire;
+  digest: string;
+}
+
+const cases = fixtureFile.cases as DigestCase[];
 
 const snake: SnakeWire = {
   id: 7,
@@ -34,5 +45,16 @@ describe("stateDigest", () => {
 
   it("sorts entities by ID", () => {
     expect(stateDigest([snake], [second, first], economy)).toBe(stateDigest([snake], [first, second], economy));
+  });
+
+  it.each(cases.map((entry) => [entry.name, entry] as const))("matches the shared fixture %s", (_name, entry) => {
+    expect(stateDigest(entry.snakes, entry.food, entry.economy)).toBe(entry.digest);
+    expect(stateDigest([...entry.snakes].reverse(), [...entry.food].reverse(), entry.economy)).toBe(entry.digest);
+  });
+
+  it("hashes body points in wire order rather than by sample id", () => {
+    const left = cases.find((entry) => entry.name === "body-order-a");
+    const right = cases.find((entry) => entry.name === "body-order-b");
+    expect(left?.digest).not.toBe(right?.digest);
   });
 });

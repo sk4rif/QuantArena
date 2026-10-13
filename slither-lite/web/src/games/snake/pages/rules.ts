@@ -159,7 +159,7 @@ Paper/Casual $80 · Mid $400 · Standard $800 · High $1,600 · Elite $2,400</pr
       <p>The server checks after every tick and every exit that money is conserved:</p>
       <pre class="formula">ticket inflow + initial treasury
     = live worth + floor balls + pending floor + payouts + voided platform fees</pre>
-      <p><code>platformFeesNanos</code> is the cumulative simulated amount removed from circulation, not platform revenue. The published <code>economy</code> object also carries <code>floorLiquidityRatioPpm</code>, <code>starvationTaxNumerator</code> and <code>inheritanceTaxBasisPoints</code> on every delta, allowing humans and bots to reproduce the current rates.</p>
+      <p><code>platformFeesNanos</code> is the cumulative simulated amount removed from circulation, not platform revenue. The published <code>economy</code> object carries <code>floorLiquidityRatioPpm</code>, <code>starvationTaxNumerator</code> and <code>inheritanceTaxBasisPoints</code> whenever they change, so humans and bots can reproduce the current rates. A delta that omits <code>economy</code> means those values are unchanged.</p>
     </section>
 
     <section id="rules-system">

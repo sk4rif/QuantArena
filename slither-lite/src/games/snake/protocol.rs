@@ -150,13 +150,17 @@ pub struct Delta {
     pub tick: u64,
     pub sequence: u64,
     pub digest: String,
-    pub economy: EconomyStateWire,
+    /// Omitted when the economy snapshot is unchanged. Clients keep the previous value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub economy: Option<EconomyStateWire>,
     pub snakes_added: Vec<SnakeWire>,
     pub snakes_updated: Vec<SnakePatch>,
     pub snakes_removed: Vec<EntityId>,
     pub food_added: Vec<FoodWire>,
     pub food_removed: Vec<EntityId>,
-    pub leaderboard: Vec<LeaderboardEntry>,
+    /// Omitted when the top-ten snapshot is unchanged. Clients keep the previous value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leaderboard: Option<Vec<LeaderboardEntry>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -182,7 +186,7 @@ pub struct EconomyConfigWire {
     pub platform_fee_basis_points: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EconomyStateWire {
     pub pending_floor_nanos: u64,
@@ -194,7 +198,7 @@ pub struct EconomyStateWire {
     pub inheritance_tax_basis_points: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnakeWire {
     pub id: EntityId,
@@ -227,7 +231,7 @@ pub struct SnakePatch {
     pub replace_body: Option<Vec<BodyPointWire>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BodyPointWire {
     pub id: SampleId,
@@ -235,7 +239,7 @@ pub struct BodyPointWire {
     pub y: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FoodWire {
     pub id: EntityId,

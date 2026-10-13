@@ -4,8 +4,12 @@ pub mod placement;
 pub mod spatial;
 pub mod world;
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
+use axum::extract::ws::Utf8Bytes;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use super::{
@@ -16,10 +20,69 @@ use super::{
 use economy::Tier;
 pub use world::GameWorld;
 
+/// JSON for one delta, serialized once. `Utf8Bytes` clones by reference count,
+/// so each socket can take a copy without copying the payload.
 #[derive(Debug, Clone)]
 pub struct PublishedDelta {
     pub sequence: u64,
-    pub text: Arc<str>,
+    pub text: Utf8Bytes,
+}
+
+/// 15 Hz publishes. 256 slots keep roughly 17 seconds of deltas so a slow
+/// socket can catch up before the broadcast reports `Lagged`.
+const DELTA_CHANNEL_CAPACITY: usize = 256;
+
+#[derive(Debug, Default)]
+struct ReplicaWatch {
+    resync_pending: bool,
+    consecutive_digest_mismatches: u8,
+    last_bootstrap: Option<Instant>,
+}
+
+struct Session {
+    direct: mpsc::Sender<ServerMessage>,
+    watch: ReplicaWatch,
+}
+
+/// Browser inputs carry a replica digest. A known sequence must mismatch twice
+/// before a bootstrap, and pushes are limited to one per second — the same
+/// budget as an explicit resync. An unknown sequence still resyncs on the
+/// first report once that budget is free.
+fn observe_replica(
+    watch: &mut ReplicaWatch,
+    sequence_known: bool,
+    digest_matches: bool,
+    now: Instant,
+) -> Option<&'static str> {
+    if digest_matches {
+        watch.resync_pending = false;
+        watch.consecutive_digest_mismatches = 0;
+        return None;
+    }
+    if watch.resync_pending {
+        return None;
+    }
+    let reason = if sequence_known {
+        if watch.consecutive_digest_mismatches < 2 {
+            watch.consecutive_digest_mismatches += 1;
+        }
+        if watch.consecutive_digest_mismatches < 2 {
+            return None;
+        }
+        "digestMismatch"
+    } else {
+        "sequenceUnknown"
+    };
+    let cooled_down = watch
+        .last_bootstrap
+        .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(1));
+    cooled_down.then_some(reason)
+}
+
+fn note_bootstrap_pushed(watch: &mut ReplicaWatch, now: Instant) {
+    watch.resync_pending = true;
+    watch.consecutive_digest_mismatches = 0;
+    watch.last_bootstrap = Some(now);
 }
 
 /// The client's view of the replicated state, used to detect drift.
@@ -81,7 +144,7 @@ impl WorldHandle {
 
 pub fn spawn_world(tier: Tier) -> WorldHandle {
     let (command_tx, mut command_rx) = mpsc::channel(512);
-    let (delta_tx, _) = broadcast::channel(64);
+    let (delta_tx, _) = broadcast::channel(DELTA_CHANNEL_CAPACITY);
     let handle = WorldHandle {
         commands: command_tx,
         deltas: delta_tx.clone(),
@@ -89,7 +152,7 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
 
     tokio::spawn(async move {
         let mut world = GameWorld::new(tier);
-        let mut sessions: BTreeMap<EntityId, (mpsc::Sender<ServerMessage>, bool)> = BTreeMap::new();
+        let mut sessions: BTreeMap<EntityId, Session> = BTreeMap::new();
         let mut tick_interval =
             tokio::time::interval(Duration::from_secs_f64(1.0 / f64::from(TICK_RATE)));
         let mut publish_interval =
@@ -101,8 +164,8 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
             tokio::select! {
                 _ = tick_interval.tick() => {
                     for elimination in world.tick() {
-                        if let Some((sender, _)) = sessions.get(&elimination.player_id) {
-                            let _ = sender.try_send(ServerMessage::Eliminated {
+                        if let Some(session) = sessions.get(&elimination.player_id) {
+                            let _ = session.direct.try_send(ServerMessage::Eliminated {
                                 reason: elimination.reason,
                                 final_worth_nanos: elimination.final_worth.0,
                                 ticket_nanos: world.ticket().0,
@@ -113,8 +176,8 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
                     let receipts = world.complete_cash_outs();
                     let completed = !receipts.is_empty();
                     for receipt in receipts {
-                        if let Some((sender, _)) = sessions.get(&receipt.player_id) {
-                            let _ = sender.try_send(ServerMessage::CashOutReceipt(receipt));
+                        if let Some(session) = sessions.get(&receipt.player_id) {
+                            let _ = session.direct.try_send(ServerMessage::CashOutReceipt(receipt));
                         }
                     }
                     if completed {
@@ -133,7 +196,13 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
                                 publish(&mut world, &delta_tx);
                                 id
                             };
-                            sessions.insert(id, (direct_tx, false));
+                            sessions.insert(
+                                id,
+                                Session {
+                                    direct: direct_tx,
+                                    watch: ReplicaWatch::default(),
+                                },
+                            );
                             let reason = if spectate { "spectating" } else { "joined" };
                             let _ = reply.send((id, world.bootstrap(id, reason)));
                         }
@@ -150,8 +219,8 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
                         WorldCommand::Reenter { player_id, replica } => {
                             check_replica(&world, player_id, replica, &mut sessions);
                             if world.reenter(player_id) {
-                                if let Some((sender, _)) = sessions.get(&player_id) {
-                                    let _ = sender.try_send(ServerMessage::Entered { ticket_nanos: world.ticket().0 });
+                                if let Some(session) = sessions.get(&player_id) {
+                                    let _ = session.direct.try_send(ServerMessage::Entered { ticket_nanos: world.ticket().0 });
                                 }
                                 publish(&mut world, &delta_tx);
                             }
@@ -160,9 +229,9 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
                             check_replica(&world, player_id, replica, &mut sessions);
                             if let Some((completes_at_tick, inheritance_tax_basis_points)) =
                                 world.request_cash_out(player_id)
-                                && let Some((sender, _)) = sessions.get(&player_id)
+                                && let Some(session) = sessions.get(&player_id)
                             {
-                                let _ = sender.try_send(ServerMessage::CashOutPending {
+                                let _ = session.direct.try_send(ServerMessage::CashOutPending {
                                     completes_at_tick,
                                     inheritance_tax_basis_points,
                                 });
@@ -171,9 +240,9 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
                         WorldCommand::CancelCashOut { player_id, replica } => {
                             check_replica(&world, player_id, replica, &mut sessions);
                             if world.cancel_cash_out(player_id)
-                                && let Some((sender, _)) = sessions.get(&player_id)
+                                && let Some(session) = sessions.get(&player_id)
                             {
-                                let _ = sender.try_send(ServerMessage::CashOutCanceled);
+                                let _ = session.direct.try_send(ServerMessage::CashOutCanceled);
                             }
                         }
                         WorldCommand::Bootstrap { player_id, reason, reply } => {
@@ -201,7 +270,7 @@ fn publish(world: &mut GameWorld, sender: &broadcast::Sender<PublishedDelta>) {
         Ok(text) => {
             let _ = sender.send(PublishedDelta {
                 sequence,
-                text: Arc::from(text),
+                text: Utf8Bytes::from(text),
             });
         }
         Err(error) => tracing::error!(%error, "failed to serialize world delta"),
@@ -212,28 +281,91 @@ fn check_replica(
     world: &GameWorld,
     player_id: EntityId,
     replica: Option<ReplicaState>,
-    sessions: &mut BTreeMap<EntityId, (mpsc::Sender<ServerMessage>, bool)>,
+    sessions: &mut BTreeMap<EntityId, Session>,
 ) {
     let Some(ReplicaState { sequence, digest }) = replica else {
         return;
     };
-    let matches = world.digest_matches(sequence, digest);
-    let Some((sender, resync_pending)) = sessions.get_mut(&player_id) else {
+    let Some(session) = sessions.get_mut(&player_id) else {
         return;
     };
-    if matches {
-        *resync_pending = false;
-    } else if !*resync_pending {
-        let reason = if world.sequence_is_known(sequence) {
-            "digestMismatch"
-        } else {
-            "sequenceUnknown"
-        };
-        if sender
-            .try_send(ServerMessage::Bootstrap(world.bootstrap(player_id, reason)))
-            .is_ok()
-        {
-            *resync_pending = true;
-        }
+    let now = Instant::now();
+    let Some(reason) = observe_replica(
+        &mut session.watch,
+        world.sequence_is_known(sequence),
+        world.digest_matches(sequence, digest),
+        now,
+    ) else {
+        return;
+    };
+    if session
+        .direct
+        .try_send(ServerMessage::Bootstrap(world.bootstrap(player_id, reason)))
+        .is_ok()
+    {
+        note_bootstrap_pushed(&mut session.watch, now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_digest_mismatch_waits_for_a_second_consecutive_failure() {
+        let mut watch = ReplicaWatch::default();
+        let now = Instant::now();
+        assert_eq!(observe_replica(&mut watch, true, false, now), None);
+        assert_eq!(observe_replica(&mut watch, true, true, now), None);
+        assert_eq!(observe_replica(&mut watch, true, false, now), None);
+        assert_eq!(
+            observe_replica(&mut watch, true, false, now),
+            Some("digestMismatch")
+        );
+        note_bootstrap_pushed(&mut watch, now);
+        assert_eq!(observe_replica(&mut watch, true, false, now), None);
+    }
+
+    #[test]
+    fn unknown_sequence_bootstraps_immediately_inside_the_rate_limit() {
+        let mut watch = ReplicaWatch::default();
+        let now = Instant::now();
+        assert_eq!(
+            observe_replica(&mut watch, false, false, now),
+            Some("sequenceUnknown")
+        );
+        note_bootstrap_pushed(&mut watch, now);
+        assert_eq!(
+            observe_replica(&mut watch, false, false, now + Duration::from_millis(500)),
+            None
+        );
+        let cooled = now + Duration::from_secs(2);
+        assert_eq!(observe_replica(&mut watch, false, false, cooled), None);
+        assert_eq!(observe_replica(&mut watch, true, true, cooled), None);
+        assert_eq!(
+            observe_replica(&mut watch, false, false, cooled),
+            Some("sequenceUnknown")
+        );
+    }
+
+    #[test]
+    fn second_digest_mismatch_respects_the_one_second_bootstrap_limit() {
+        let mut watch = ReplicaWatch::default();
+        let now = Instant::now();
+        assert_eq!(observe_replica(&mut watch, true, false, now), None);
+        assert_eq!(
+            observe_replica(&mut watch, true, false, now),
+            Some("digestMismatch")
+        );
+        note_bootstrap_pushed(&mut watch, now);
+        assert_eq!(observe_replica(&mut watch, true, true, now), None);
+
+        let soon = now + Duration::from_millis(200);
+        assert_eq!(observe_replica(&mut watch, true, false, soon), None);
+        assert_eq!(observe_replica(&mut watch, true, false, soon), None);
+        assert_eq!(
+            observe_replica(&mut watch, true, false, now + Duration::from_secs(1)),
+            Some("digestMismatch")
+        );
     }
 }
