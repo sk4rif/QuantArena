@@ -53,8 +53,8 @@ export function stateDigest(
   food: Iterable<FoodWire>,
   economy: EconomyStateWire,
 ): string {
-  const sortedSnakes = [...snakes].sort(byId);
-  const sortedFood = [...food].sort(byId);
+  const sortedSnakes = [...snakes].sort((left, right) => left.id - right.id);
+  const sortedFood = [...food].sort((left, right) => left.id - right.id);
   const hash = new Hasher();
   hash.bytes(encoder.encode("SLITHER2"));
   hash.u64(economy.pendingFloorNanos);
@@ -95,11 +95,4 @@ export function stateDigest(
     hash.u8(item.color);
   }
   return hash.value.toString(16).padStart(16, "0");
-}
-
-/** Integer compare. Subtraction would be a float operation and is not a total order for every id. */
-function byId(left: { id: number }, right: { id: number }): number {
-  if (left.id < right.id) return -1;
-  if (left.id > right.id) return 1;
-  return 0;
 }
