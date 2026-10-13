@@ -175,7 +175,7 @@ export function renderDocs(): string {
       )}
       ${code("json", inputExamples)}
       <p>Your snake turns toward the requested direction at a bounded turn rate (3.4 rad/s), so <code>input</code> expresses steering intent rather than teleporting. Send it as often as you like; more than the 30 Hz simulation tick adds nothing. The latest input stays in effect until you send another.</p>
-      <p class="hint">The browser client sends <code>stateSequence</code> and <code>stateDigest</code> with each input so the server can detect drift. It sends that input when aim changes, when boost toggles, and at least every few hundred milliseconds while the heading is held. The bot endpoint does not require or check digests.</p>
+      <p class="hint">The browser client also sends <code>stateSequence</code> and <code>stateDigest</code> with every input so the server can detect drift. The bot endpoint does not require or check them.</p>
     </section>
 
     <section id="docs-server">
@@ -185,7 +185,7 @@ export function renderDocs(): string {
         ["type", "When", "Contents"],
         [
           ["<code>bootstrap</code>", "After <code>join</code>, after <code>resync</code>, and after a slow-consumer overflow", "Complete state: <code>playerId</code>, <code>tickRate</code>, <code>publishRate</code>, <code>arenaHalfExtent</code>, <code>cashOutCompletesAtTick</code>, <code>cashOutInheritanceTaxBasisPoints</code>, <code>tick</code>, <code>sequence</code>, <code>digest</code>, <code>reason</code>, <code>economyConfig</code>, <code>economy</code>, <code>snakes</code>, <code>food</code>, <code>leaderboard</code>."],
-          ["<code>delta</code>", "15 times per second", "<code>tick</code>, <code>sequence</code>, <code>digest</code>, <code>snakesAdded</code>, <code>snakesUpdated</code> (unchanged snakes omitted), <code>snakesRemoved</code>, <code>foodAdded</code>, <code>foodRemoved</code>. <code>economy</code> and <code>leaderboard</code> are included only when they changed."],
+          ["<code>delta</code>", "15 times per second", "<code>tick</code>, <code>sequence</code>, <code>digest</code>, <code>economy</code>, <code>snakesAdded</code>, <code>snakesUpdated</code>, <code>snakesRemoved</code>, <code>foodAdded</code>, <code>foodRemoved</code>, <code>leaderboard</code>."],
           ["<code>entered</code>", "After a successful <code>reenter</code>", "<code>ticketNanos</code>"],
           ["<code>cashOutPending</code>", "After <code>cashOut</code>", "<code>completesAtTick</code> and the locked <code>inheritanceTaxBasisPoints</code>. The payout occurs only if the snake survives; the inheritance rate does not change during the countdown."],
           ["<code>cashOutCanceled</code>", "After a successful <code>cancelCashOut</code>", "No additional fields."],
@@ -206,9 +206,8 @@ export function renderDocs(): string {
         <li>Delete every id in <code>snakesRemoved</code>, then insert <code>snakesAdded</code>.</li>
         <li>For each entry in <code>snakesUpdated</code>, overwrite that snake's <code>x</code>, <code>y</code>, <code>angle</code>, <code>speed</code>, <code>radius</code>, <code>worthNanos</code> and <code>lastInputSeq</code>. Then update the body: if <code>replaceBody</code> is present, use it; otherwise remove the first <code>trimBody</code> points and append <code>appendBody</code>.</li>
         <li>Delete every id in <code>foodRemoved</code>, then insert <code>foodAdded</code>.</li>
-        <li>If <code>economy</code> or <code>leaderboard</code> is present, replace the previous value. If either field is absent, keep what you already have. The digest still covers the full economy, including a value this delta did not repeat.</li>
       </ol>
-      <p>Deltas are sequential: <code>sequence</code> increases by exactly 1. If you see a gap, send <code>resync</code> and discard deltas until the new <code>bootstrap</code> arrives. Every message also carries a 64-bit <code>digest</code> of snakes, food, and economy (not the leaderboard). Verifying it is optional for bots. A sequence gap still needs a resync; a single digest mismatch can be transient, and resync requests are limited to one per second.</p>
+      <p>Deltas are sequential: <code>sequence</code> increases by exactly 1. If you see a gap, send <code>resync</code> and discard deltas until the new <code>bootstrap</code> arrives. Every message also carries a 64-bit <code>digest</code> of the state; verifying it is optional for bots, but a mismatch is a good reason to <code>resync</code>.</p>
     </section>
 
     <section id="docs-units">
@@ -222,7 +221,7 @@ export function renderDocs(): string {
           ["Time", "The world simulates at 30 ticks per second and publishes deltas at 15 per second. <code>tick</code> counts simulation ticks."],
         ],
       )}
-      <p>The <a href="#/rules">rules</a> page has the economy and placement formulas. Static thresholds and bounds are in bootstrap <code>economyConfig</code>. An <code>economy</code> update publishes <code>floorLiquidityRatioPpm</code>, <code>starvationTaxNumerator</code> and <code>inheritanceTaxBasisPoints</code> whenever those values change. Starting a cash-out locks that rate, which is then returned in <code>cashOutPending</code> and pending bootstraps.</p>
+      <p>The <a href="#/rules">rules</a> page has the economy and placement formulas. Static thresholds and bounds are in bootstrap <code>economyConfig</code>. Every <code>economy</code> update publishes <code>floorLiquidityRatioPpm</code>, <code>starvationTaxNumerator</code> and <code>inheritanceTaxBasisPoints</code>. Starting a cash-out locks that rate, which is then returned in <code>cashOutPending</code> and pending bootstraps.</p>
     </section>
 
     <section id="docs-errors">

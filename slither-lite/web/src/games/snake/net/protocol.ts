@@ -109,15 +109,13 @@ export interface DeltaMessage {
   tick: number;
   sequence: number;
   digest: string;
-  /** Absent when the economy snapshot is unchanged. */
-  economy?: EconomyStateWire;
+  economy: EconomyStateWire;
   snakesAdded: SnakeWire[];
   snakesUpdated: SnakePatch[];
   snakesRemoved: number[];
   foodAdded: FoodWire[];
   foodRemoved: number[];
-  /** Absent when the leaderboard snapshot is unchanged. */
-  leaderboard?: LeaderboardEntry[];
+  leaderboard: LeaderboardEntry[];
 }
 
 export interface EnteredMessage {

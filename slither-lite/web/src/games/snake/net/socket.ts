@@ -5,86 +5,6 @@ import { FOOD_GLOW_RADIUS_MULTIPLIER, PROTOCOL_VERSION, isServerMessage, type Ca
 
 export type ConnectionStatus = "connecting" | "connected" | "resyncing" | "disconnected" | "error";
 
-/**
- * Jitter floor only (~0.05°). Anything a player can see sends on the next 30 Hz
- * sample; a larger deadzone leaves the server on the old heading and the
- * predicted snake fights the mouse.
- */
-export const INPUT_AIM_EPSILON_RADIANS = (0.05 * Math.PI) / 180;
-/** The server keeps the last aim and boost, so this only refreshes the session. */
-export const INPUT_KEEPALIVE_MS = 400;
-export const RESYNC_MIN_INTERVAL_MS = 1000;
-export const DIGEST_MISMATCHES_BEFORE_RESYNC = 2;
-
-export type ResyncReason = "sequenceGap" | "digestMismatch";
-
-export interface SentInput {
-  aim: number;
-  boost: boolean;
-  sentAt: number;
-}
-
-export interface ResyncStep {
-  resyncing: boolean;
-  send: ResyncReason | null;
-}
-
-export function aimChangedMeaningfully(previous: number, next: number): boolean {
-  if (!Number.isFinite(previous) || !Number.isFinite(next)) return true;
-  const delta = Math.atan2(Math.sin(next - previous), Math.cos(next - previous));
-  return Math.abs(delta) >= INPUT_AIM_EPSILON_RADIANS;
-}
-
-export function shouldSendInput(input: InputState, last: SentInput | undefined, now: number): boolean {
-  if (!last) return true;
-  if (input.boost !== last.boost) return true;
-  if (aimChangedMeaningfully(last.aim, input.aim)) return true;
-  return now - last.sentAt >= INPUT_KEEPALIVE_MS;
-}
-
-/** Sequence gaps resync immediately. Digest mismatches wait for a second consecutive miss. Both are limited to one request per second. */
-export class ResyncController {
-  private consecutiveDigestMismatches = 0;
-  private lastSentAt = Number.NEGATIVE_INFINITY;
-  private queued: ResyncReason | null = null;
-
-  reset(): void {
-    this.consecutiveDigestMismatches = 0;
-    this.lastSentAt = Number.NEGATIVE_INFINITY;
-    this.queued = null;
-  }
-
-  synchronized(): void {
-    this.consecutiveDigestMismatches = 0;
-    this.queued = null;
-  }
-
-  digestMismatch(now: number): ResyncStep {
-    this.consecutiveDigestMismatches += 1;
-    const resyncing = this.consecutiveDigestMismatches >= DIGEST_MISMATCHES_BEFORE_RESYNC;
-    if (resyncing) this.remember("digestMismatch");
-    return { resyncing, send: this.poll(now) };
-  }
-
-  sequenceGap(now: number): ResyncStep {
-    this.remember("sequenceGap");
-    return { resyncing: true, send: this.poll(now) };
-  }
-
-  poll(now: number): ResyncReason | null {
-    if (!this.queued || now - this.lastSentAt < RESYNC_MIN_INTERVAL_MS) return null;
-    const reason = this.queued;
-    this.queued = null;
-    this.lastSentAt = now;
-    if (reason === "digestMismatch") this.consecutiveDigestMismatches = 0;
-    return reason;
-  }
-
-  private remember(reason: ResyncReason): void {
-    if (this.queued !== "sequenceGap" || reason === "sequenceGap") this.queued = reason;
-  }
-}
-
 export interface SocketCallbacks {
   onState: () => void;
   onFoodAdded: (items: FoodWire[]) => void;
@@ -101,9 +21,7 @@ export class GameSocket {
   private inputTimer?: number;
   private pingTimer?: number;
   private inputSequence = 0;
-  private lastSentInput?: SentInput;
-  private readonly resync = new ResyncController();
-  private resyncing = false;
+  private resyncRequested = false;
 
   constructor(
     readonly replica: Replica,
@@ -113,9 +31,6 @@ export class GameSocket {
   /** `url` is the arena's absolute `/ws` endpoint, which may be on another region's host. */
   connect(url: string, name: string, skin: string, input: InputState, spectate = false): void {
     this.close();
-    this.lastSentInput = undefined;
-    this.resync.reset();
-    this.resyncing = false;
     this.callbacks.onStatus("connecting");
     const socket = new WebSocket(url);
     this.socket = socket;
@@ -170,12 +85,8 @@ export class GameSocket {
   }
 
   private sendInput(input: InputState): void {
-    const now = performance.now();
-    const due = this.resync.poll(now);
-    if (due) this.sendResync(due);
-    if (!this.replica.playerId || !shouldSendInput(input, this.lastSentInput, now)) return;
+    if (!this.replica.playerId) return;
     this.inputSequence += 1;
-    this.lastSentInput = { aim: input.aim, boost: input.boost, sentAt: now };
     this.send({
       type: "input",
       inputSeq: this.inputSequence,
@@ -205,41 +116,23 @@ export class GameSocket {
     }
     switch (message.type) {
       case "bootstrap": {
-        const now = performance.now();
+        this.resyncRequested = false;
         const matches = this.replica.applyBootstrap(message);
-        if (matches) {
-          this.resync.synchronized();
-          this.resyncing = false;
-          this.callbacks.onStatus("connected", "");
-        } else {
-          const step = this.resync.digestMismatch(now);
-          if (step.resyncing) {
-            this.noteResync(step, "Bootstrap digest mismatch");
-          } else {
-            this.resyncing = false;
-            this.callbacks.onStatus("connected", "");
-            if (step.send) this.sendResync(step.send);
-          }
-        }
+        this.callbacks.onStatus(matches ? "connected" : "resyncing", matches ? "" : "Bootstrap digest mismatch");
+        if (!matches) this.requestResync("digestMismatch");
         this.callbacks.onState();
         break;
       }
       case "delta": {
         if (message.sequence <= this.replica.sequence) break;
-        const now = performance.now();
         const expectedSequence = this.replica.sequence + 1;
         const pickupItems = localPickupItems(this.replica, message);
         const synchronized = this.replica.applyDelta(message);
         if (!synchronized) {
-          const gap = message.sequence !== expectedSequence;
-          const step = gap ? this.resync.sequenceGap(now) : this.resync.digestMismatch(now);
-          this.noteResync(step, gap ? "State sequence gap; requesting authority resync" : "State mismatch; requesting authority resync");
+          const reason = message.sequence === expectedSequence ? "digestMismatch" : "sequenceGap";
+          this.callbacks.onStatus("resyncing", "State mismatch; requesting authority resync");
+          this.requestResync(reason);
         } else {
-          this.resync.synchronized();
-          if (this.resyncing) {
-            this.resyncing = false;
-            this.callbacks.onStatus("connected", "");
-          }
           if (message.foodAdded.length > 0) this.callbacks.onFoodAdded(message.foodAdded);
           if (pickupItems.length > 0) {
             this.callbacks.onPickup(
@@ -285,15 +178,9 @@ export class GameSocket {
     }
   }
 
-  private noteResync(step: ResyncStep, detail: string): void {
-    if (step.resyncing) {
-      this.resyncing = true;
-      this.callbacks.onStatus("resyncing", detail);
-    }
-    if (step.send) this.sendResync(step.send);
-  }
-
-  private sendResync(reason: ResyncReason): void {
+  private requestResync(reason: "sequenceGap" | "digestMismatch"): void {
+    if (this.resyncRequested) return;
+    this.resyncRequested = true;
     this.send({
       type: "resync",
       stateSequence: this.replica.sequence,
