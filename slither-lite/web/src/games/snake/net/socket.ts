@@ -6,11 +6,10 @@ import { FOOD_GLOW_RADIUS_MULTIPLIER, PROTOCOL_VERSION, isServerMessage, type Ca
 export type ConnectionStatus = "connecting" | "connected" | "resyncing" | "disconnected" | "error";
 
 /**
- * Jitter floor only (~0.05°). Anything a player can see sends on the next 30 Hz
- * sample; a larger deadzone leaves the server on the old heading and the
- * predicted snake fights the mouse.
+ * Jitter floor only (0.001°). Any real pointer motion sends on the next 30 Hz
+ * sample. A wider deadzone leaves the server on the old heading.
  */
-export const INPUT_AIM_EPSILON_RADIANS = (0.05 * Math.PI) / 180;
+export const INPUT_AIM_EPSILON_RADIANS = (0.001 * Math.PI) / 180;
 /** The server keeps the last aim and boost, so this only refreshes the session. */
 export const INPUT_KEEPALIVE_MS = 400;
 export const RESYNC_MIN_INTERVAL_MS = 1000;

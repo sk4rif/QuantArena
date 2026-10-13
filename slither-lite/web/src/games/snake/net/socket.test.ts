@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { InputState } from "../game/input";
 import {
+  INPUT_AIM_EPSILON_RADIANS,
   INPUT_KEEPALIVE_MS,
   ResyncController,
   shouldSendInput,
@@ -12,21 +13,21 @@ function input(aim: number, boost = false): InputState {
 }
 
 describe("shouldSendInput", () => {
-  it("sends the first sample, meaningful aim changes, boost toggles, and keepalives", () => {
+  it("sends the first sample, a 0.001° aim change, boost toggles, and keepalives", () => {
     expect(shouldSendInput(input(0), undefined, 0)).toBe(true);
     const last: SentInput = { aim: 0, boost: false, sentAt: 0 };
     expect(shouldSendInput(input(0), last, INPUT_KEEPALIVE_MS - 1)).toBe(false);
-    expect(shouldSendInput(input((0.02 * Math.PI) / 180), last, 10)).toBe(false);
-    expect(shouldSendInput(input((0.4 * Math.PI) / 180), last, 10)).toBe(true);
-    expect(shouldSendInput(input(Math.PI / 180), last, 10)).toBe(true);
+    expect(shouldSendInput(input(INPUT_AIM_EPSILON_RADIANS * 0.5), last, 10)).toBe(false);
+    expect(shouldSendInput(input(INPUT_AIM_EPSILON_RADIANS), last, 10)).toBe(true);
+    expect(shouldSendInput(input((0.002 * Math.PI) / 180), last, 10)).toBe(true);
     expect(shouldSendInput(input(0, true), last, 10)).toBe(true);
     expect(shouldSendInput(input(0), last, INPUT_KEEPALIVE_MS)).toBe(true);
   });
 
   it("treats a wrap across ±π as a small aim change", () => {
-    const last: SentInput = { aim: Math.PI - 0.0001, boost: false, sentAt: 0 };
-    expect(shouldSendInput(input(-Math.PI + 0.0001), last, 10)).toBe(false);
-    expect(shouldSendInput(input(-Math.PI + 0.002), last, 10)).toBe(true);
+    const last: SentInput = { aim: Math.PI - 1e-8, boost: false, sentAt: 0 };
+    expect(shouldSendInput(input(-Math.PI + 1e-8), last, 10)).toBe(false);
+    expect(shouldSendInput(input(-Math.PI + INPUT_AIM_EPSILON_RADIANS), last, 10)).toBe(true);
   });
 
   it("advances the input sequence only when a message is sent", () => {
