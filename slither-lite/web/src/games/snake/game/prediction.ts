@@ -217,13 +217,9 @@ export class BodyInterpolation {
   }
 }
 
-/** Same limit as the server `TURN_RATE`. The head turns at this rate on the client. */
-const TURN_RATE = 3.4;
-
 export class LocalPrediction {
   x = 0;
   y = 0;
-  angle = 0;
   initialized = false;
 
   reconcile(replica: Replica): void {
@@ -234,35 +230,17 @@ export class LocalPrediction {
     }
     let authorityX = dequantizePosition(snake.x);
     let authorityY = dequantizePosition(snake.y);
-    const authorityAngle = dequantizeAngle(snake.angle);
     if (!this.initialized) {
       this.x = authorityX;
       this.y = authorityY;
-      this.angle = authorityAngle;
       this.initialized = true;
       return;
     }
     const halfExtent = dequantizePosition(replica.arenaHalfExtent);
     authorityX = nearestWrappedCoordinate(authorityX, this.x, halfExtent);
     authorityY = nearestWrappedCoordinate(authorityY, this.y, halfExtent);
-    const errorX = authorityX - this.x;
-    const errorY = authorityY - this.y;
-    const forwardX = Math.cos(this.angle);
-    const forwardY = Math.sin(this.angle);
-    const parallel = errorX * forwardX + errorY * forwardY;
-    // A snapshot is older than the pointer. Pulling backward along the heading
-    // makes the snake look slow, so only sideways error and a server that is
-    // actually ahead of us correct the position.
-    this.x += (errorX - parallel * forwardX) * 0.35;
-    this.y += (errorY - parallel * forwardY) * 0.35;
-    if (parallel > 0) {
-      this.x += forwardX * parallel * 0.35;
-      this.y += forwardY * parallel * 0.35;
-    }
-    const angleError = normalizeAngle(authorityAngle - this.angle);
-    if (Math.abs(angleError) > 1.2) {
-      this.angle = normalizeAngle(this.angle + angleError * 0.5);
-    }
+    this.x += (authorityX - this.x) * 0.35;
+    this.y += (authorityY - this.y) * 0.35;
   }
 
   update(replica: Replica, input: InputState, deltaSeconds: number): void {
@@ -270,11 +248,11 @@ export class LocalPrediction {
     if (!snake || !this.initialized) return;
     const serverSpeed = dequantizePosition(snake.speed);
     const speed = input.boost && snake.worthNanos > 0 ? Math.max(serverSpeed, 220) : serverSpeed;
-    const difference = normalizeAngle(input.aim - this.angle);
-    const maxTurn = TURN_RATE * deltaSeconds;
-    this.angle = normalizeAngle(this.angle + Math.max(-maxTurn, Math.min(maxTurn, difference)));
-    this.x += Math.cos(this.angle) * speed * deltaSeconds;
-    this.y += Math.sin(this.angle) * speed * deltaSeconds;
+    const authorityAngle = dequantizeAngle(snake.angle);
+    const angleDifference = normalizeAngle(input.aim - authorityAngle);
+    const predictedAngle = authorityAngle + Math.max(-0.12, Math.min(0.12, angleDifference));
+    this.x += Math.cos(predictedAngle) * speed * deltaSeconds;
+    this.y += Math.sin(predictedAngle) * speed * deltaSeconds;
   }
 }
 

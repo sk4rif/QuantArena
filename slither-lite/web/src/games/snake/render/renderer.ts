@@ -326,7 +326,7 @@ export class Renderer {
       if (snake.id === this.replica.playerId && this.prediction.initialized) {
         x = this.prediction.x;
         y = this.prediction.y;
-        angle = this.prediction.angle;
+        angle = dequantizeAngle(snake.angle);
       }
       const body = this.bodyInterpolation.trail(snake.id, { x, y }, halfExtent, now)
         ?? snake.body.map((point) => ({ x: dequantizePosition(point.x), y: dequantizePosition(point.y) }));

@@ -86,7 +86,7 @@ The floor-spawn coordinate is shown on the minimap as a pink crosshair and can b
 ## Replication
 
 - Rust/Tokio/Axum runs one authoritative 30 Hz arena. When queued commands, the tick, and a publish are ready together, commands already in the channel are applied in arrival order, then the tick, then the publish. An input or cash-out that has already arrived counts on that tick.
-- Browsers send aim and boost at 30 Hz, and entry and cash-out start/cancel intent. The server keeps the last aim and boost between messages. The local snake turns toward the pointer immediately at the same 3.4 rad/s limit as the server, instead of waiting for the next snapshot.
+- Browsers send aim and boost when they change, plus a keepalive a few times per second, and entry and cash-out start/cancel intent. The server keeps the last aim and boost between messages.
 - Join sends a complete global bootstrap. 15 Hz ordered deltas then contain snake patches (unchanged snakes omitted) and ball additions/removals. Economy and leaderboard snapshots are sent only when they change.
 - Each input includes the client’s latest state sequence and canonical 64-bit digest.
 - A sequence gap or a slow-client overflow triggers a full resync. A single digest mismatch is tolerated; the browser asks again after a second consecutive mismatch. Browser and bot resync requests are limited to one per second.

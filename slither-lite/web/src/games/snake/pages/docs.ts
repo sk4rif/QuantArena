@@ -175,7 +175,7 @@ export function renderDocs(): string {
       )}
       ${code("json", inputExamples)}
       <p>Your snake turns toward the requested direction at a bounded turn rate (3.4 rad/s), so <code>input</code> expresses steering intent rather than teleporting. Send it as often as you like; more than the 30 Hz simulation tick adds nothing. The latest input stays in effect until you send another.</p>
-      <p class="hint">The browser client sends <code>stateSequence</code> and <code>stateDigest</code> with every input so the server can detect drift. It sends that input at 30 Hz. The bot endpoint does not require or check digests.</p>
+      <p class="hint">The browser client sends <code>stateSequence</code> and <code>stateDigest</code> with each input so the server can detect drift. It sends that input when aim changes, when boost toggles, and at least every few hundred milliseconds while the heading is held. The bot endpoint does not require or check digests.</p>
     </section>
 
     <section id="docs-server">
