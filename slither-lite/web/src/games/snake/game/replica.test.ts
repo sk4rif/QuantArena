@@ -350,6 +350,22 @@ describe("LocalPrediction", () => {
     prediction.reconcile(replica);
     prediction.update(replica, { aim: Math.PI / 2, boost: false, panX: 0, panY: 0 }, 1);
     expect(local.lastInputSeq).toBe(4);
-    expect(prediction.y).toBeGreaterThan(0);
+    expect(prediction.angle).toBeCloseTo(Math.PI / 2, 5);
+    expect(prediction.y).toBeGreaterThan(100);
+  });
+
+  it("does not drag the snake backward toward a stale snapshot", () => {
+    const replica = new Replica();
+    const local = snake();
+    replica.playerId = local.id;
+    replica.snakes.set(local.id, local);
+    const prediction = new LocalPrediction();
+    prediction.reconcile(replica);
+    const aim = { aim: 0, boost: false, panX: 0, panY: 0 };
+    prediction.update(replica, aim, 0.2);
+    const ahead = prediction.x;
+    expect(ahead).toBeGreaterThan(20);
+    prediction.reconcile(replica);
+    expect(prediction.x).toBeGreaterThanOrEqual(ahead - 1e-6);
   });
 });

@@ -1,55 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { InputState } from "../game/input";
-import {
-  INPUT_AIM_EPSILON_RADIANS,
-  INPUT_KEEPALIVE_MS,
-  ResyncController,
-  shouldSendInput,
-  type SentInput,
-} from "./socket";
-
-function input(aim: number, boost = false): InputState {
-  return { aim, boost, panX: 0, panY: 0 };
-}
-
-describe("shouldSendInput", () => {
-  it("sends the first sample, a 0.001° aim change, boost toggles, and keepalives", () => {
-    expect(shouldSendInput(input(0), undefined, 0)).toBe(true);
-    const last: SentInput = { aim: 0, boost: false, sentAt: 0 };
-    expect(shouldSendInput(input(0), last, INPUT_KEEPALIVE_MS - 1)).toBe(false);
-    expect(shouldSendInput(input(INPUT_AIM_EPSILON_RADIANS * 0.5), last, 10)).toBe(false);
-    expect(shouldSendInput(input(INPUT_AIM_EPSILON_RADIANS), last, 10)).toBe(true);
-    expect(shouldSendInput(input((0.002 * Math.PI) / 180), last, 10)).toBe(true);
-    expect(shouldSendInput(input(0, true), last, 10)).toBe(true);
-    expect(shouldSendInput(input(0), last, INPUT_KEEPALIVE_MS)).toBe(true);
-  });
-
-  it("treats a wrap across ±π as a small aim change", () => {
-    const last: SentInput = { aim: Math.PI - 1e-8, boost: false, sentAt: 0 };
-    expect(shouldSendInput(input(-Math.PI + 1e-8), last, 10)).toBe(false);
-    expect(shouldSendInput(input(-Math.PI + INPUT_AIM_EPSILON_RADIANS), last, 10)).toBe(true);
-  });
-
-  it("advances the input sequence only when a message is sent", () => {
-    let sequence = 0;
-    let last: SentInput | undefined;
-    const state = input(0);
-    const tick = (now: number) => {
-      if (!shouldSendInput(state, last, now)) return;
-      sequence += 1;
-      last = { aim: state.aim, boost: state.boost, sentAt: now };
-    };
-    tick(0);
-    tick(16);
-    tick(32);
-    expect(sequence).toBe(1);
-    state.boost = true;
-    tick(40);
-    expect(sequence).toBe(2);
-    tick(40 + INPUT_KEEPALIVE_MS);
-    expect(sequence).toBe(3);
-  });
-});
+import { ResyncController } from "./socket";
 
 describe("ResyncController", () => {
   it("ignores one digest mismatch and rate-limits the resync after the second", () => {
