@@ -15,11 +15,17 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{
+    broadcast::{
+        self,
+        error::{RecvError, TryRecvError},
+    },
+    mpsc, oneshot,
+};
 
 use crate::games::snake::{
     config::PROTOCOL_VERSION,
-    game::{ReplicaState, WorldCommand, WorldHandle},
+    game::{PublishedDelta, ReplicaState, WorldCommand, WorldHandle},
     protocol::{
         Bootstrap, BotMessage, ClientMessage, ServerMessage, aim_from_vector, digest_from_hex,
     },
@@ -158,20 +164,18 @@ async fn serve_socket(socket: WebSocket, world: WorldHandle, endpoint: Endpoint)
                 match delta {
                     Ok(delta) if delta.sequence > last_sent_sequence => {
                         last_sent_sequence = delta.sequence;
-                        if sender.send(Message::Text(delta.text.to_string().into())).await.is_err() {
+                        if sender.send(Message::Text(delta.text.clone())).await.is_err() {
                             break;
                         }
                     }
                     Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        if let Some(bootstrap) = request_bootstrap(&world, player_id, "queueOverflow").await {
-                            last_sent_sequence = bootstrap.sequence;
-                            if send_server(&mut sender, ServerMessage::Bootstrap(bootstrap)).await.is_err() {
-                                break;
-                            }
+                    Err(RecvError::Lagged(skipped)) => {
+                        tracing::debug!(player_id, skipped, "delta subscriber lagged");
+                        if !recover_lag(&mut deltas, &mut sender, &world, player_id, &mut last_sent_sequence).await {
+                            break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(RecvError::Closed) => break,
                 }
             }
             incoming = receiver.next() => {
@@ -423,6 +427,88 @@ where
     world.commands.send(command).await.is_ok()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum LagPlan {
+    /// The oldest retained delta is the next sequence the socket has not sent.
+    Resume,
+    /// The retained delta is already covered by a bootstrap or an earlier send.
+    Ignore,
+    /// Retained deltas skip one or more sequences and cannot be applied.
+    Bootstrap,
+}
+
+fn lag_plan(last_sent: u64, retained: u64) -> LagPlan {
+    if retained <= last_sent {
+        LagPlan::Ignore
+    } else if retained == last_sent.saturating_add(1) {
+        LagPlan::Resume
+    } else {
+        LagPlan::Bootstrap
+    }
+}
+
+enum Retained {
+    Ready(PublishedDelta),
+    Empty,
+    Closed,
+}
+
+fn next_retained(receiver: &mut broadcast::Receiver<PublishedDelta>) -> Retained {
+    loop {
+        match receiver.try_recv() {
+            Ok(delta) => return Retained::Ready(delta),
+            Err(TryRecvError::Lagged(_)) => continue,
+            Err(TryRecvError::Empty) => return Retained::Empty,
+            Err(TryRecvError::Closed) => return Retained::Closed,
+        }
+    }
+}
+
+fn discard_retained(receiver: &mut broadcast::Receiver<PublishedDelta>) {
+    while let Ok(_) | Err(TryRecvError::Lagged(_)) = receiver.try_recv() {}
+}
+
+/// After `Lagged`, continue a contiguous stream. A real sequence hole gets one
+/// bootstrap instead of a burst of deltas the client would have to reject.
+async fn recover_lag<S>(
+    deltas: &mut broadcast::Receiver<PublishedDelta>,
+    sender: &mut S,
+    world: &WorldHandle,
+    player_id: u32,
+    last_sent_sequence: &mut u64,
+) -> bool
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    match next_retained(deltas) {
+        Retained::Closed => false,
+        Retained::Empty => true,
+        Retained::Ready(delta) => match lag_plan(*last_sent_sequence, delta.sequence) {
+            LagPlan::Resume => {
+                *last_sent_sequence = delta.sequence;
+                sender.send(Message::Text(delta.text.clone())).await.is_ok()
+            }
+            LagPlan::Ignore => true,
+            LagPlan::Bootstrap => {
+                discard_retained(deltas);
+                let Some(bootstrap) = request_bootstrap(world, player_id, "queueOverflow").await
+                else {
+                    return false;
+                };
+                *last_sent_sequence = bootstrap.sequence;
+                send_server(sender, ServerMessage::Bootstrap(bootstrap))
+                    .await
+                    .is_ok()
+            }
+        },
+    }
+}
+
+/// Browser and bot resync requests share this budget: one bootstrap per second.
+fn resync_allowed(last_client_resync: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(last_client_resync) >= Duration::from_secs(1)
+}
+
 /// Sends a fresh bootstrap, rate limited to one per second per connection.
 async fn resync<S>(
     world: &WorldHandle,
@@ -434,10 +520,11 @@ async fn resync<S>(
 where
     S: futures_util::Sink<Message> + Unpin,
 {
-    if last_client_resync.elapsed() < Duration::from_secs(1) {
+    let now = Instant::now();
+    if !resync_allowed(*last_client_resync, now) {
         return true;
     }
-    *last_client_resync = Instant::now();
+    *last_client_resync = now;
     let Some(bootstrap) = request_bootstrap(world, player_id, reason).await else {
         return false;
     };
@@ -628,5 +715,47 @@ mod tests {
         assert_eq!(sanitize_name("  Ada-1  ").as_deref(), Some("Ada-1"));
         assert!(sanitize_name("").is_none());
         assert!(sanitize_name("<script>").is_none());
+    }
+
+    #[test]
+    fn resync_budget_is_one_per_second_for_every_endpoint() {
+        let now = Instant::now();
+        let recent = now.checked_sub(Duration::from_millis(999)).unwrap();
+        let cooled = now.checked_sub(Duration::from_secs(1)).unwrap();
+        assert!(!resync_allowed(recent, now));
+        assert!(resync_allowed(cooled, now));
+    }
+
+    #[test]
+    fn lag_plan_resumes_only_the_next_sequence() {
+        assert_eq!(lag_plan(10, 11), LagPlan::Resume);
+        assert_eq!(lag_plan(10, 10), LagPlan::Ignore);
+        assert_eq!(lag_plan(10, 9), LagPlan::Ignore);
+        assert_eq!(lag_plan(10, 12), LagPlan::Bootstrap);
+    }
+
+    #[tokio::test]
+    async fn overflow_exposes_the_oldest_retained_delta() {
+        let (sender, mut receiver) = broadcast::channel(2);
+        for sequence in 1..=3 {
+            sender
+                .send(PublishedDelta {
+                    sequence,
+                    text: axum::extract::ws::Utf8Bytes::from(sequence.to_string()),
+                })
+                .unwrap();
+        }
+        assert!(matches!(receiver.recv().await, Err(RecvError::Lagged(_))));
+        let Retained::Ready(delta) = next_retained(&mut receiver) else {
+            panic!("lag left a retained delta");
+        };
+        assert!(delta.sequence > 1);
+        assert_eq!(lag_plan(0, delta.sequence), LagPlan::Bootstrap);
+        assert_eq!(
+            lag_plan(delta.sequence - 1, delta.sequence),
+            LagPlan::Resume
+        );
+        discard_retained(&mut receiver);
+        assert!(matches!(next_retained(&mut receiver), Retained::Empty));
     }
 }

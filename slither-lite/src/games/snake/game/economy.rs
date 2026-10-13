@@ -149,11 +149,9 @@ pub struct TaxSchedule {
 
 pub fn tax_schedule(live_worth: Money, floor_liquidity: Money) -> TaxSchedule {
     let total = u128::from(live_worth.0) + u128::from(floor_liquidity.0);
-    let ratio = if total == 0 {
-        0
-    } else {
-        ((u128::from(floor_liquidity.0) * u128::from(LIQUIDITY_RATIO_SCALE)) / total) as u64
-    };
+    let ratio = (u128::from(floor_liquidity.0) * u128::from(LIQUIDITY_RATIO_SCALE))
+        .checked_div(total)
+        .unwrap_or(0) as u64;
     let normalized = ratio
         .saturating_sub(LIQUIDITY_RATIO_LOW_PPM)
         .min(LIQUIDITY_RATIO_HIGH_PPM - LIQUIDITY_RATIO_LOW_PPM);

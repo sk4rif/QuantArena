@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { stateDigest } from "../net/digest";
 import { localPickupItems } from "../net/socket";
 import type { BootstrapMessage, DeltaMessage, EconomyStateWire, SnakeWire } from "../net/protocol";
-import { BodyInterpolation, RemoteInterpolation } from "./prediction";
+import { BodyInterpolation, LocalPrediction, RemoteInterpolation } from "./prediction";
 import { Replica } from "./replica";
 
 const economy: EconomyStateWire = {
@@ -294,5 +294,62 @@ describe("Replica", () => {
     replica.applyBootstrap(bootstrap());
     const delta = { type: "delta", sequence: 3 } as DeltaMessage;
     expect(replica.applyDelta(delta)).toBe(false);
+  });
+
+  it("keeps economy and leaderboard when a delta omits them", () => {
+    const replica = new Replica();
+    expect(replica.applyBootstrap(bootstrap())).toBe(true);
+    const kept = [{ id: 1, name: "Player", worthNanos: 5_000_000_000 }];
+    replica.leaderboard = kept.map((entry) => ({ ...entry }));
+    const delta: DeltaMessage = {
+      type: "delta",
+      tick: 2,
+      sequence: 2,
+      digest: replica.digest,
+      snakesAdded: [],
+      snakesUpdated: [],
+      snakesRemoved: [],
+      foodAdded: [],
+      foodRemoved: [],
+    };
+    expect(replica.applyDelta(delta)).toBe(true);
+    expect(replica.economy).toEqual(economy);
+    expect(replica.leaderboard).toEqual(kept);
+    expect(replica.snakes.get(1)?.x).toBe(0);
+  });
+
+  it("replaces the leaderboard when a delta sends an empty one", () => {
+    const replica = new Replica();
+    replica.applyBootstrap(bootstrap());
+    replica.leaderboard = [{ id: 1, name: "Player", worthNanos: 5_000_000_000 }];
+    const delta: DeltaMessage = {
+      type: "delta",
+      tick: 2,
+      sequence: 2,
+      digest: replica.digest,
+      snakesAdded: [],
+      snakesUpdated: [],
+      snakesRemoved: [],
+      foodAdded: [],
+      foodRemoved: [],
+      leaderboard: [],
+    };
+    expect(replica.applyDelta(delta)).toBe(true);
+    expect(replica.leaderboard).toEqual([]);
+  });
+});
+
+describe("LocalPrediction", () => {
+  it("steers from the live aim while the acknowledged input sequence stays put", () => {
+    const replica = new Replica();
+    const local = snake();
+    local.lastInputSeq = 4;
+    replica.playerId = local.id;
+    replica.snakes.set(local.id, local);
+    const prediction = new LocalPrediction();
+    prediction.reconcile(replica);
+    prediction.update(replica, { aim: Math.PI / 2, boost: false, panX: 0, panY: 0 }, 1);
+    expect(local.lastInputSeq).toBe(4);
+    expect(prediction.y).toBeGreaterThan(0);
   });
 });

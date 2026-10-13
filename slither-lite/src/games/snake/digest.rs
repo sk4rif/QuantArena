@@ -94,7 +94,8 @@ pub fn state_digest(snakes: &[SnakeWire], food: &[FoodWire], economy: EconomySta
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::games::snake::protocol::BodyPointWire;
+    use crate::games::snake::protocol::{BodyPointWire, digest_to_hex};
+    use serde::Deserialize;
 
     #[test]
     fn digest_is_stable_regardless_of_entity_order() {
@@ -143,5 +144,56 @@ mod tests {
         let digest = state_digest(std::slice::from_ref(&snake), &[first, second], economy);
         assert_eq!(digest, 0x482f_1f70_9e0b_180f);
         assert_eq!(digest, state_digest(&[snake], &[second, first], economy));
+    }
+
+    #[test]
+    fn digest_matches_shared_cross_language_fixtures() {
+        #[derive(Deserialize)]
+        struct FixtureFile {
+            cases: Vec<Fixture>,
+        }
+        #[derive(Deserialize)]
+        struct Fixture {
+            name: String,
+            snakes: Vec<SnakeWire>,
+            food: Vec<FoodWire>,
+            economy: EconomyStateWire,
+            digest: String,
+        }
+
+        let file: FixtureFile = serde_json::from_str(include_str!(
+            "../../../web/src/games/snake/net/digest-fixtures.json"
+        ))
+        .expect("digest fixtures parse");
+        let mut mismatches = Vec::new();
+        for case in &file.cases {
+            let forward = digest_to_hex(state_digest(&case.snakes, &case.food, case.economy));
+            let mut snakes = case.snakes.clone();
+            snakes.reverse();
+            let mut food = case.food.clone();
+            food.reverse();
+            let reversed = digest_to_hex(state_digest(&snakes, &food, case.economy));
+            if forward != case.digest || reversed != forward {
+                mismatches.push(format!(
+                    "{}: file {} forward {} reversed {}",
+                    case.name, case.digest, forward, reversed
+                ));
+            }
+        }
+        let body_a = file
+            .cases
+            .iter()
+            .find(|case| case.name == "body-order-a")
+            .expect("body-order-a");
+        let body_b = file
+            .cases
+            .iter()
+            .find(|case| case.name == "body-order-b")
+            .expect("body-order-b");
+        assert_ne!(
+            body_a.digest, body_b.digest,
+            "body points are hashed in wire order, not sorted by sample id"
+        );
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 }

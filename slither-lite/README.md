@@ -82,10 +82,10 @@ The spawn point is shown on the minimap as a pink crosshair and can be computed 
 ## Replication
 
 - Rust/Tokio/Axum runs one authoritative 30 Hz arena.
-- Browsers send only aim, boost, entry, and cash-out start/cancel intent.
-- Join sends a complete global bootstrap; 15 Hz ordered deltas then contain snake patches and ball additions/removals.
-- Every input includes the client’s latest state sequence and canonical 64-bit digest.
-- A sequence gap, digest mismatch, or slow-client overflow triggers a complete state resync.
+- Browsers send aim and boost when they change, plus a keepalive a few times per second, and entry and cash-out start/cancel intent. The server keeps the last aim and boost between messages.
+- Join sends a complete global bootstrap. 15 Hz ordered deltas then contain snake patches (unchanged snakes omitted) and ball additions/removals. Economy and leaderboard snapshots are sent only when they change.
+- Each input includes the client’s latest state sequence and canonical 64-bit digest.
+- A sequence gap or a slow-client overflow triggers a full resync. A single digest mismatch is tolerated; the browser asks again after a second consecutive mismatch. Browser and bot resync requests are limited to one per second.
 - Prediction/interpolation is visual only and remains separate from the hashed authoritative replica.
 
 Protocol v5 publishes dynamic starvation and inheritance-tax bounds, the current effective-floor ratio and rates, and the exact inheritance amount and rate on cash-out receipts.
