@@ -44,6 +44,10 @@ const BOOST_DROP_GAP: f32 = 30.0;
 const MAX_RECEIPTS: usize = 1_024;
 const MAX_COLLISION_AUDITS: usize = 1_024;
 pub const CASH_OUT_DELAY_TICKS: u64 = TICK_RATE as u64 * 10;
+/// Snakes and food use ids below this value. Spectators use the upper half, so
+/// watching never consumes an id that later food contests, spawns, or the
+/// state digest depend on.
+const SPECTATOR_ID_BASE: EntityId = 1 << 31;
 
 #[derive(Debug, Clone)]
 struct Player {
@@ -113,6 +117,7 @@ pub struct GameWorld {
     tick: u64,
     sequence: u64,
     next_entity_id: EntityId,
+    next_spectator_id: EntityId,
     next_sample_id: u64,
     next_receipt_id: u64,
     next_collision_id: u64,
@@ -138,6 +143,7 @@ impl GameWorld {
             tick: 0,
             sequence: 0,
             next_entity_id: 1,
+            next_spectator_id: SPECTATOR_ID_BASE,
             next_sample_id: 1,
             next_receipt_id: 1,
             next_collision_id: 1,
@@ -168,7 +174,9 @@ impl GameWorld {
     }
 
     pub fn spectate(&mut self) -> EntityId {
-        self.next_entity_id()
+        let id = self.next_spectator_id;
+        self.next_spectator_id = id.checked_add(1).expect("spectator ID exhausted");
+        id
     }
 
     pub fn join(&mut self, name: String, skin: String) -> EntityId {
@@ -628,6 +636,7 @@ impl GameWorld {
                     })
                     .map(|position| candidate.distance_squared(position))
                     .fold(f32::INFINITY, f32::min);
+                // Strictly greater, so an equal clearance keeps the first cell scanned.
                 if clearance > best.0 {
                     best = (clearance, candidate);
                 }
@@ -639,6 +648,8 @@ impl GameWorld {
     fn consume_food(&mut self, spatial: &SpatialIndex) {
         let mut consumed = BTreeSet::new();
         let mut gains: BTreeMap<EntityId, Money> = BTreeMap::new();
+        // Ascending id is join order. The first snake that reaches a ball takes
+        // it, so the lower id wins when two snakes can collect it on the same tick.
         for (snake_id, snake) in &self.snakes {
             for food_id in
                 spatial.nearby_food(snake.position, snake.radius(self.tier.ticket()) + 24.0)
@@ -951,10 +962,11 @@ impl GameWorld {
 
     fn next_entity_id(&mut self) -> EntityId {
         let id = self.next_entity_id;
-        self.next_entity_id = self
-            .next_entity_id
-            .checked_add(1)
-            .expect("entity ID exhausted");
+        assert!(
+            id < SPECTATOR_ID_BASE,
+            "game entity id entered the spectator id space"
+        );
+        self.next_entity_id = id.checked_add(1).expect("entity ID exhausted");
         id
     }
 
@@ -1050,16 +1062,85 @@ mod tests {
         let ticket_inflow = world.ledger.ticket_inflow;
         let snake_count = world.snakes.len();
         let player_count = world.players.len();
+        let next_entity_id = world.next_entity_id;
         let id = world.spectate();
         let bootstrap = world.bootstrap(id, "spectating");
 
+        assert!(id >= SPECTATOR_ID_BASE);
+        assert_eq!(world.next_entity_id, next_entity_id);
         assert_eq!(bootstrap.player_id, id);
         assert!(!world.players.contains_key(&id));
         assert!(!world.snakes.contains_key(&id));
+        assert!(!world.food.contains_key(&id));
         assert_eq!(world.players.len(), player_count);
         assert_eq!(world.snakes.len(), snake_count);
         assert_eq!(world.ledger.ticket_inflow, ticket_inflow);
         world.assert_conserved();
+    }
+
+    #[test]
+    fn spectators_do_not_change_world_state_or_digest() {
+        let mut solo = GameWorld::test_world();
+        let mut watched = GameWorld::test_world();
+        for _ in 0..5 {
+            let id = watched.spectate();
+            assert!(id >= SPECTATOR_ID_BASE);
+            assert!(!watched.players.contains_key(&id));
+            assert!(!watched.snakes.contains_key(&id));
+            assert!(!watched.food.contains_key(&id));
+        }
+
+        let solo_id = solo.join("Ada".into(), "red".into());
+        let watched_id = watched.join("Ada".into(), "red".into());
+        assert_eq!(solo_id, watched_id);
+        solo.input(solo_id, 1, 0.7, true);
+        watched.input(watched_id, 1, 0.7, true);
+
+        for _ in 0..90 {
+            watched.spectate();
+            solo.tick();
+            watched.tick();
+        }
+
+        watched.spectate();
+        let solo_second = solo.join("Bea".into(), "blue".into());
+        let watched_second = watched.join("Bea".into(), "blue".into());
+        assert_eq!(solo_second, watched_second);
+        assert_eq!(comparable_state(&solo), comparable_state(&watched));
+    }
+
+    fn comparable_state(
+        world: &GameWorld,
+    ) -> (
+        Vec<SnakeWire>,
+        Vec<FoodWire>,
+        EconomyStateWire,
+        u64,
+        EntityId,
+        u64,
+        Money,
+    ) {
+        let snakes = world
+            .snakes
+            .values()
+            .map(|snake| snake.to_wire(world.tier.ticket()))
+            .collect::<Vec<_>>();
+        let food = world
+            .food
+            .values()
+            .map(|item| item.to_wire(world.tier.coin()))
+            .collect::<Vec<_>>();
+        let economy = world.economy_state();
+        let digest = state_digest(&snakes, &food, economy);
+        (
+            snakes,
+            food,
+            economy,
+            digest,
+            world.next_entity_id,
+            world.tick,
+            world.boost_pending,
+        )
     }
 
     #[test]

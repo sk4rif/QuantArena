@@ -36,11 +36,11 @@ starvation tax       = max(worth, $5) × starvation numerator / 1,000,000,000
 boost cost           = max(worth, $5) × 2,667 / 2,000,000
 ```
 
-There is no temporal smoothing. One starvation snapshot applies to every snake in a tick; the endpoints correspond to approximate four-minute and fifteen-minute worth half-lives. Formula remainders carry between ticks, preventing rounding leakage. Starvation tax moves into the shared floor pool. Boost cost accumulates in a reserve; each time it reaches one coin, a coin is created at the position of a boosting snake. The reserve is cleared on any tick with no boosting snake, and its money joins the general floor pool. Reaching zero worth eliminates the snake.
+There is no temporal smoothing. One starvation snapshot applies to every snake in a tick; the endpoints correspond to approximate four-minute and fifteen-minute worth half-lives. Each snake carries its own starvation remainder and its own boost remainder across ticks: a charge is `(effective_worth × numerator + remainder) / denominator`, and the leftover stays on that snake. Those remainders are not in the published snapshot, so the next tick's exact charge is not fixed by the public delta alone. Starvation tax moves into the shared floor pool. Boost cost accumulates in a reserve; each time it reaches one coin, a coin is created at the position of a boosting snake. When several snakes are boosting, those coins are dealt in join order (ascending id). The reserve is cleared on any tick with no boosting snake, and its money joins the general floor pool. Reaching zero worth eliminates the snake.
 
 When a snake dies, its full worth moves to the pending floor pool and `floor(worth / coin)` balls are spread evenly along its head/body path; the sub-coin remainder stays in the pool. The killer does not receive value automatically.
 
-Cash-out is server-authoritative and takes 300 simulation ticks (10 seconds). During the countdown the snake remains playable, continues paying charges, and can still die; the player may cancel before completion. The current 2–20% inheritance rate is locked when the countdown starts. If the snake survives, that locked rate is applied to its final worth and returned entirely to the pending floor pool. A 2% platform fee is then applied to the post-inheritance amount. Because every tier currently uses simulated money, only that platform fee is voided; the inheritance tax remains in the game and none of it goes to the platform. The locked rate does not change during the countdown.
+Cash-out is server-authoritative and takes 300 simulation ticks (10 seconds). During the countdown the snake remains playable, continues paying charges, and can still die; the player may cancel before completion. The current 2–20% inheritance rate is locked when the countdown starts. If the snake survives, that locked rate is applied to its final worth and the inheritance tax is added to the pending floor pool. Completing a cash-out does not release coins by itself. A 2% platform fee is then applied to the post-inheritance amount. Because every tier currently uses simulated money, only that platform fee is voided; the inheritance tax remains in the game and none of it goes to the platform. The locked rate does not change during the countdown.
 
 A completed cash-out returns an authoritative in-memory receipt. Closing the tab, navigating away, or losing the connection abandons the snake: boost turns off, it coasts in its last direction, and it remains vulnerable and continues paying starvation tax. A pending cash-out completes if the abandoned snake survives to its deadline; if it dies first, its full worth is redistributed along its body and no payout is recorded.
 
@@ -64,7 +64,7 @@ Doubling worth therefore increases girth by approximately 41% and doubles body l
 
 ## Deterministic placement
 
-Pending-floor releases (starvation tax, inheritance tax, boost reserve leftovers, eliminated remainders) spawn in the zone of the arena with the lowest AUM weight. Every snake adds weight to the map that fades with distance:
+Pending-floor releases (starvation tax, inheritance tax, boost reserve leftovers, eliminated remainders) spawn in the zone of the arena with the lowest AUM weight. After charges and boost balls, each tick emits at most two general floor coins (`pending floor − boost reserve`, one coin at a time). A completed cash-out leaves its inheritance tax in that pool for later ticks to emit. The coordinate follows public snake heads and worth. The count also depends on the boost reserve, which is carried inside the pending pool and is not published separately, and on each snake's fractional tax and boost remainders, which carry between ticks. Every snake adds weight to the map that fades with distance:
 
 ```text
 weight(x, y) = sum_p( AUM_p / (torus_distance((x, y), pos_p)^2 + 100) )
@@ -73,15 +73,19 @@ spawn        = argmin weight(x, y)       // scanned on a 64 x 64 grid across the
 
 Ties go to the first cell scanned, row by row, so the result is deterministic. A richer snake pushes the spawn point further away.
 
-All general floor balls released in one call stack at that exact coordinate. When no snake holds AUM, general floor releases use the arena center.
+All general floor balls released in one tick stack at that exact coordinate. When no snake holds AUM, general floor releases use the arena center.
+
+A new snake is placed separately from floor coins. The first snake in an empty arena spawns at `(0, 0)`, facing east. Every later snake takes the cell of greatest clearance on the same 64 × 64 grid, measured as the minimum squared wrapped distance to every existing head and body point. Clearance ties keep the first cell scanned. The snake faces the arena center, and its body is a 24-point circle of radius `10 × 25 / 2π` trailing that heading. Spawn protection lasts 60 ticks (2 seconds): collisions cannot eliminate it, and its body still blocks other snakes.
+
+Contested food in one tick goes to the lower snake id, which is join order. Equal leaderboard worth ranks the lower id first. Equal head-to-head worth eliminates both snakes. Spectators use a separate id space, so joining as a watcher does not shift later snake or food ids and does not change the world digest.
 
 The initial treasury fills the map with a centered 40 × 40 grid: one coin at each of 1,600 coordinates, spaced 150 world units apart from −2,925 through 2,925 on each axis. Since each coin is 1% of a ticket, the treasury is worth 16 tickets: $80 in Paper/Casual, $400 in Mid, $800 in Standard, $1,600 in High, and $2,400 in Elite.
 
-The spawn point is shown on the minimap as a pink crosshair and can be computed from public snake state. The full formulas are on the website Rules page. Elimination balls follow the dead body and boost balls follow the trail instead of using floor placement.
+The floor-spawn coordinate is shown on the minimap as a pink crosshair and can be computed from public snake heads and worth. The full formulas are on the website Rules page. Elimination balls follow the dead body and boost balls follow the trail instead of using floor placement.
 
 ## Replication
 
-- Rust/Tokio/Axum runs one authoritative 30 Hz arena.
+- Rust/Tokio/Axum runs one authoritative 30 Hz arena. When queued commands, the tick, and a publish are ready together, commands already in the channel are applied in arrival order, then the tick, then the publish. An input or cash-out that has already arrived counts on that tick.
 - Browsers send aim and boost when they change, plus a keepalive a few times per second, and entry and cash-out start/cancel intent. The server keeps the last aim and boost between messages.
 - Join sends a complete global bootstrap. 15 Hz ordered deltas then contain snake patches (unchanged snakes omitted) and ball additions/removals. Economy and leaderboard snapshots are sent only when they change.
 - Each input includes the client’s latest state sequence and canonical 64-bit digest.
@@ -278,7 +282,7 @@ npm test
 npm run build
 ```
 
-Rust tests cover ticket/formula fixtures, remainder preservation, rake, conservation, treasury decomposition, deterministic placement, geometry, boost batches, collection, death redistribution, zero-worth elimination, cash-out, disconnect, and re-entry. Rust and TypeScript share a canonical state-digest fixture.
+Rust tests cover ticket/formula fixtures, remainder preservation, rake, conservation, treasury decomposition, deterministic placement, geometry, boost batches, collection, death redistribution, zero-worth elimination, cash-out, disconnect, re-entry, command-before-tick ordering, and spectator isolation from the world digest. Rust and TypeScript share a canonical state-digest fixture.
 
 ## Current scope
 

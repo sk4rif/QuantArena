@@ -160,31 +160,25 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         publish_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // Fixed priority when a tick, a publish, and queued commands are ready
+        // together. Without `biased;`, Tokio picks a ready branch at random, so
+        // an input or cash-out already sitting in the channel can miss the tick
+        // it arrived in time for and land on the next one.
+        //
+        // 1. Commands already in the channel, in arrival order. The channel is
+        //    FIFO, and each loop takes one command, so a backlog drains before
+        //    the tick instead of being shuffled. Applying those commands first
+        //    is the fair reading of "this action arrived before the tick": the
+        //    cash-out deadline and the movement for this step include it.
+        //    Handlers do not await, so a finite backlog cannot postpone the
+        //    tick past the commands that were already waiting. A command that
+        //    arrives while the tick runs waits for the next loop.
+        // 2. The simulation tick, once the queue is empty.
+        // 3. A state publish, so a snapshot taken on the same wakeup includes
+        //    the tick that just ran.
         loop {
             tokio::select! {
-                _ = tick_interval.tick() => {
-                    for elimination in world.tick() {
-                        if let Some(session) = sessions.get(&elimination.player_id) {
-                            let _ = session.direct.try_send(ServerMessage::Eliminated {
-                                reason: elimination.reason,
-                                final_worth_nanos: elimination.final_worth.0,
-                                ticket_nanos: world.ticket().0,
-                                collision_id: elimination.collision_id,
-                            });
-                        }
-                    }
-                    let receipts = world.complete_cash_outs();
-                    let completed = !receipts.is_empty();
-                    for receipt in receipts {
-                        if let Some(session) = sessions.get(&receipt.player_id) {
-                            let _ = session.direct.try_send(ServerMessage::CashOutReceipt(receipt));
-                        }
-                    }
-                    if completed {
-                        publish(&mut world, &delta_tx);
-                    }
-                },
-                _ = publish_interval.tick() => publish(&mut world, &delta_tx),
+                biased;
                 command = command_rx.recv() => {
                     let Some(command) = command else { break };
                     match command {
@@ -256,6 +250,29 @@ pub fn spawn_world(tier: Tier) -> WorldHandle {
                         }
                     }
                 }
+                _ = tick_interval.tick() => {
+                    for elimination in world.tick() {
+                        if let Some(session) = sessions.get(&elimination.player_id) {
+                            let _ = session.direct.try_send(ServerMessage::Eliminated {
+                                reason: elimination.reason,
+                                final_worth_nanos: elimination.final_worth.0,
+                                ticket_nanos: world.ticket().0,
+                                collision_id: elimination.collision_id,
+                            });
+                        }
+                    }
+                    let receipts = world.complete_cash_outs();
+                    let completed = !receipts.is_empty();
+                    for receipt in receipts {
+                        if let Some(session) = sessions.get(&receipt.player_id) {
+                            let _ = session.direct.try_send(ServerMessage::CashOutReceipt(receipt));
+                        }
+                    }
+                    if completed {
+                        publish(&mut world, &delta_tx);
+                    }
+                },
+                _ = publish_interval.tick() => publish(&mut world, &delta_tx),
             }
         }
     });
@@ -367,5 +384,124 @@ mod tests {
             observe_replica(&mut watch, true, false, now + Duration::from_secs(1)),
             Some("digestMismatch")
         );
+    }
+
+    fn tick_period() -> Duration {
+        Duration::from_secs_f64(1.0 / f64::from(super::super::config::TICK_RATE))
+    }
+
+    async fn join_player(handle: &WorldHandle, name: &str) -> (EntityId, Bootstrap) {
+        let (direct_tx, _direct_rx) = mpsc::channel(8);
+        let (reply_tx, reply_rx) = oneshot::channel();
+        handle
+            .commands
+            .send(WorldCommand::Join {
+                name: name.to_owned(),
+                skin: "red".to_owned(),
+                spectate: false,
+                direct_tx,
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        reply_rx.await.unwrap()
+    }
+
+    async fn request_bootstrap(handle: &WorldHandle, player_id: EntityId) -> Bootstrap {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        handle
+            .commands
+            .send(WorldCommand::Bootstrap {
+                player_id,
+                reason: "test".to_owned(),
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        reply_rx.await.unwrap()
+    }
+
+    /// The interval's first tick is ready as soon as the task starts. Let that
+    /// tick and the matching publish finish so the test's later wakeup is the
+    /// one under examination.
+    async fn settle_startup(handle: &WorldHandle, player_id: EntityId) -> u64 {
+        tokio::task::yield_now().await;
+        let joined = request_bootstrap(handle, player_id).await;
+        let again = request_bootstrap(handle, player_id).await;
+        assert_eq!(again.tick, joined.tick);
+        joined.tick
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queued_commands_apply_in_arrival_order_before_a_coincident_tick() {
+        let handle = spawn_world(Tier::Paper);
+        tokio::task::yield_now().await;
+        let (player_id, joined) = join_player(&handle, "Ada").await;
+        let tick_before = settle_startup(&handle, player_id).await;
+        assert_eq!(tick_before, joined.tick);
+        assert!(joined.cash_out_completes_at_tick.is_none());
+
+        // Cancel is queued first, so it is a no-op. Cash-out is queued second
+        // and must still be applied, on the clock from before the tick.
+        handle
+            .commands
+            .try_send(WorldCommand::CancelCashOut {
+                player_id,
+                replica: None,
+            })
+            .unwrap();
+        handle
+            .commands
+            .try_send(WorldCommand::CashOut {
+                player_id,
+                replica: None,
+            })
+            .unwrap();
+        // The timer wheel rounds deadlines up to the next millisecond, so step
+        // a little past one 30 Hz period. That is still short of a second tick
+        // and of the 15 Hz publish.
+        tokio::time::advance(tick_period() + Duration::from_millis(5)).await;
+        tokio::task::yield_now().await;
+
+        let after = request_bootstrap(&handle, player_id).await;
+        assert_eq!(after.tick, tick_before + 1);
+        assert_eq!(
+            after.cash_out_completes_at_tick,
+            Some(tick_before + world::CASH_OUT_DELAY_TICKS)
+        );
+    }
+
+    /// Same priority as `spawn_world`: a tick that is already due does not run
+    /// until commands queued ahead of it have been applied, in arrival order.
+    #[tokio::test(start_paused = true)]
+    async fn due_tick_waits_until_queued_commands_are_applied_in_order() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut tick = tokio::time::interval(tick_period());
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tick.tick().await;
+
+        {
+            let waker = std::task::Waker::noop();
+            let mut cx = std::task::Context::from_waker(waker);
+            let mut pending_tick = std::pin::pin!(tick.tick());
+            assert!(std::future::Future::poll(pending_tick.as_mut(), &mut cx).is_pending());
+        }
+
+        tokio::time::advance(tick_period() + Duration::from_millis(5)).await;
+        tx.try_send(1).unwrap();
+        tx.try_send(2).unwrap();
+
+        let mut events = Vec::new();
+        loop {
+            tokio::select! {
+                biased;
+                value = rx.recv() => events.push(value.unwrap()),
+                _ = tick.tick() => {
+                    events.push(0);
+                    break;
+                }
+            }
+        }
+        assert_eq!(events, vec![1, 2, 0]);
     }
 }
