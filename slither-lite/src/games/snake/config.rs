@@ -8,9 +8,12 @@ pub const PUBLISH_RATE: u16 = 15;
 pub const ARENA_HALF_EXTENT: f32 = 3_000.0;
 pub const ARENA_SIZE: f32 = ARENA_HALF_EXTENT * 2.0;
 pub const BASE_SPEED: f32 = 150.0;
-pub const BOOST_SPEED: f32 = 220.0;
+pub const BOOST_SPEED: f32 = 440.0;
 pub const TURN_RATE: f32 = 3.4;
 pub const BODY_SPACING: f32 = 10.0;
+/// Fraction of the gap to the newer point that an older body point closes when a sample is laid
+/// down. The first four points behind the rigid neck ramp up to this value. This is slither.io's `cst`.
+pub const BODY_PULL: f32 = 0.43;
 pub const DIGEST_HISTORY: usize = 256;
 pub const POSITION_SCALE: f32 = 100.0;
 pub const ANGLE_SCALE: f32 = 10_000.0;

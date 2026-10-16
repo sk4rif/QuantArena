@@ -14,7 +14,7 @@ pub const STARVATION_DENOMINATOR: u64 = 1_000_000_000;
 pub const INHERITANCE_TAX_MIN_BASIS_POINTS: u16 = 200;
 pub const INHERITANCE_TAX_MAX_BASIS_POINTS: u16 = 2_000;
 pub const BOOST_NUMERATOR: u64 = 2_667;
-pub const BOOST_DENOMINATOR: u64 = 2_000_000;
+pub const BOOST_DENOMINATOR: u64 = 4_000_000;
 pub const PLATFORM_FEE_BASIS_POINTS: u16 = 200;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -348,11 +348,11 @@ mod tests {
         );
         assert_eq!(
             boost_charge(Money::from_dollars(5), &mut FormulaRemainder::default()),
-            Money(6_667_500)
+            Money(3_333_750)
         );
         assert_eq!(
             boost_charge(Money::from_dollars(150), &mut FormulaRemainder::default()),
-            Money(200_025_000)
+            Money(100_012_500)
         );
     }
 

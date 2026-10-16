@@ -175,7 +175,7 @@ export function renderDocs(): string {
       )}
       ${code("json", inputExamples)}
       <p>Your snake turns toward the requested direction at a bounded turn rate (3.4 rad/s), so <code>input</code> expresses steering intent rather than teleporting. Send it as often as you like; more than the 30 Hz simulation tick adds nothing. The latest input stays in effect until you send another.</p>
-      <p class="hint">The browser client sends <code>stateSequence</code> and <code>stateDigest</code> with each input so the server can detect drift. It sends that input when aim changes by about a degree, when boost toggles, and at least every few hundred milliseconds. The bot endpoint does not require or check digests.</p>
+      <p class="hint">The browser client sends <code>stateSequence</code> and <code>stateDigest</code> with each input so the server can detect drift. It sends that input when aim changes by half a degree, when boost toggles, and at least every few hundred milliseconds. The bot endpoint does not require or check digests.</p>
     </section>
 
     <section id="docs-server">
@@ -195,7 +195,7 @@ export function renderDocs(): string {
           ["<code>error</code>", "A request was rejected", "<code>code</code>, <code>message</code>. See <a href=\"#/docs/errors\">Errors</a>."],
         ],
       )}
-      <p>A <code>snake</code> has <code>id</code>, <code>name</code>, <code>skin</code>, <code>x</code>, <code>y</code>, <code>angle</code>, <code>speed</code>, <code>radius</code>, <code>worthNanos</code>, <code>lastInputSeq</code> and <code>body</code> (a list of <code>{id, x, y}</code> points). A ball (<code>food</code>) has <code>id</code>, <code>x</code>, <code>y</code>, <code>radius</code>, <code>valueNanos</code> and <code>color</code>.</p>
+      <p>A <code>snake</code> has <code>id</code>, <code>name</code>, <code>skin</code>, <code>x</code>, <code>y</code>, <code>angle</code>, <code>speed</code>, <code>radius</code>, <code>worthNanos</code>, <code>lastInputSeq</code> and <code>body</code> (a list of <code>{id, x, y}</code> points). <code>body</code> is the trail, oldest point first. The newest three points stay where the head laid them. Each new point pulls every older point toward the point ahead of it, by a fraction that ramps up to 0.43 over the first four points and stays at 0.43 after that, taking the shortest step across the map edge. A held turn therefore tightens the coil and leaves the head outside it. When those points move, the delta carries <code>replaceBody</code> instead of a trim and append. A ball (<code>food</code>) has <code>id</code>, <code>x</code>, <code>y</code>, <code>radius</code>, <code>valueNanos</code> and <code>color</code>.</p>
       ${code("json", bootstrapExample)}
     </section>
 

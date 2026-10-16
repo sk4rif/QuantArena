@@ -247,7 +247,7 @@ export class LocalPrediction {
     const snake = replica.snakes.get(replica.playerId);
     if (!snake || !this.initialized) return;
     const serverSpeed = dequantizePosition(snake.speed);
-    const speed = input.boost && snake.worthNanos > 0 ? Math.max(serverSpeed, 220) : serverSpeed;
+    const speed = input.boost && snake.worthNanos > 0 ? Math.max(serverSpeed, 440) : serverSpeed;
     const authorityAngle = dequantizeAngle(snake.angle);
     const angleDifference = normalizeAngle(input.aim - authorityAngle);
     const predictedAngle = authorityAngle + Math.max(-0.12, Math.min(0.12, angleDifference));

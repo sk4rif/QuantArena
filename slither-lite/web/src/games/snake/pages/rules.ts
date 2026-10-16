@@ -55,8 +55,9 @@ spawn   = the center with the greatest clearance</pre>
         <tbody>
           <tr><td>Arena</td><td>6,000 × 6,000 square; crossing an edge wraps to the opposite edge</td></tr>
           <tr><td>Simulation rate</td><td>30 ticks per second</td></tr>
-          <tr><td>Speed</td><td>150 units/s, or 220 units/s while boosting</td></tr>
+          <tr><td>Speed</td><td>150 units/s, or 440 units/s while boosting</td></tr>
           <tr><td>Turn rate</td><td>Up to 3.4 rad/s toward the requested direction</td></tr>
+          <tr><td>Coil</td><td>The newest three body points stay on the head's path. Each new point pulls older points inward, so a held turn tightens instead of sealing the head inside a ring</td></tr>
         </tbody>
       </table></div>
     </section>
@@ -84,7 +85,7 @@ inheritance_tax = 20% − (20% − 2%) × q</pre>
       <p>There is no temporal smoothing: authoritative entries, pickups, deaths and exits affect the rates immediately. Smoothstep keeps the transition flat at the 25% and 65% boundaries. One starvation-rate snapshot applies to every snake in a tick. Each cash-out locks the current inheritance rate when its countdown starts.</p>
       <p>Each tick uses <code>effective_worth = max(worth, $5)</code>. At or below a 25% ratio, starvation has an approximate four-minute worth half-life and inheritance tax is 20%; at or above 65%, starvation has an approximate fifteen-minute half-life and inheritance tax is 2%. Each snake keeps its own starvation remainder and its own boost remainder. A charge is <code>(effective_worth × numerator + remainder) / denominator</code>, and the leftover stays on that snake until the next tick. Those remainders are not part of the published snapshot, so the exact charge on the following tick is not fixed by the public delta alone.</p>
       <pre class="formula">starvation_tax = effective_worth × starvation_numerator / 1,000,000,000
-boost_cost     = effective_worth × 2,667 / 2,000,000        only while boosting</pre>
+boost_cost     = effective_worth × 2,667 / 4,000,000        only while boosting</pre>
       <p>Both charges move from the snake into the pending floor pool. Boost cost also accumulates in a separate reserve; each time that reserve reaches the tier's coin value, one coin is created at the position of a boosting snake. On any tick in which no snake is boosting, the reserve is cleared and its money is released with the rest of the pending floor pool. A snake whose worth reaches zero is eliminated.</p>
     </section>
 

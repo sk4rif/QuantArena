@@ -33,7 +33,7 @@ q = x²(3 - 2x)
 starvation numerator = 96,266 - (96,266 - 25,672) × q
 inheritance tax      = 20% - (20% - 2%) × q
 starvation tax       = max(worth, $5) × starvation numerator / 1,000,000,000
-boost cost           = max(worth, $5) × 2,667 / 2,000,000
+boost cost           = max(worth, $5) × 2,667 / 4,000,000
 ```
 
 There is no temporal smoothing. One starvation snapshot applies to every snake in a tick; the endpoints correspond to approximate four-minute and fifteen-minute worth half-lives. Each snake carries its own starvation remainder and its own boost remainder across ticks: a charge is `(effective_worth × numerator + remainder) / denominator`, and the leftover stays on that snake. Those remainders are not in the published snapshot, so the next tick's exact charge is not fixed by the public delta alone. Starvation tax moves into the shared floor pool. Boost cost accumulates in a reserve; each time it reaches one coin, a coin is created at the position of a boosting snake. When several snakes are boosting, those coins are dealt in join order (ascending id). The reserve is cleared on any tick with no boosting snake, and its money joins the general floor pool. Reaching zero worth eliminates the snake.
@@ -61,6 +61,8 @@ body points = clamp(round(24 × worth / ticket), 8, 1200)
 ```
 
 Doubling worth therefore increases girth by approximately 41% and doubles body length. Collision size and rendering use this authoritative radius.
+
+The newest three body points stay on the path the head took. Each time a new point is laid down, every older point is pulled toward the point ahead of it (a fraction that ramps up to 0.43 over the first four points, then stays at 0.43), along the shortest step around the map edge. A held turn tightens the coil, so the head remains outside it.
 
 ## Deterministic placement
 

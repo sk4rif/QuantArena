@@ -18,7 +18,7 @@ const config: EconomyConfigWire = {
   inheritanceTaxMinBasisPoints: 200,
   inheritanceTaxMaxBasisPoints: 2_000,
   boostNumerator: 2_667,
-  boostDenominator: 2_000_000,
+  boostDenominator: 4_000_000,
   cashOutDelayTicks: 300,
   platformFeeBasisPoints: 200,
 };
@@ -40,8 +40,8 @@ describe("calculateSnakeEconomyMetrics", () => {
     expect(metrics.taxPerSecondNanos).toBe(9_145_350);
     expect(metrics.starvationHalfLifeSeconds).toBeGreaterThan(300);
     expect(metrics.starvationHalfLifeSeconds).toBeLessThan(420);
-    expect(metrics.boostPerSecondNanos).toBe(200_025_000);
-    expect(metrics.currentBurnPerSecondNanos).toBe(209_170_350);
+    expect(metrics.boostPerSecondNanos).toBe(100_012_500);
+    expect(metrics.currentBurnPerSecondNanos).toBe(109_157_850);
     expect(metrics.floorLiquidityRatioPpm).toBe(450_000);
     expect(metrics.regimePosition).toBe(0.5);
     expect(metrics.inheritanceTaxBasisPoints).toBe(1_100);

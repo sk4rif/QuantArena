@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use crate::games::snake::{
     config::{
-        ARENA_HALF_EXTENT, BASE_SPEED, BODY_SPACING, BOOST_SPEED, DIGEST_HISTORY, PROTOCOL_VERSION,
-        PUBLISH_RATE, TICK_RATE, TURN_RATE,
+        ARENA_HALF_EXTENT, BASE_SPEED, BODY_PULL, BODY_SPACING, BOOST_SPEED, DIGEST_HISTORY,
+        PROTOCOL_VERSION, PUBLISH_RATE, TICK_RATE, TURN_RATE,
     },
     digest::state_digest,
     protocol::{
@@ -37,6 +37,10 @@ use super::{
 const SPAWN_INVULNERABLE_TICKS: u16 = TICK_RATE * 2;
 const SNAKE_SPAWN_GRID: usize = 64;
 const INITIAL_BODY_POINTS: usize = 24;
+/// Newest body samples that stay on the head's path. The live head is not one of them.
+const BODY_RIGID_POINTS: usize = 3;
+/// Points behind that neck whose pull ramps from `BODY_PULL / 4` up to `BODY_PULL`.
+const BODY_PULL_RAMP: usize = 4;
 const SPAWN_BODY_RADIUS: f32 = BODY_SPACING * (INITIAL_BODY_POINTS as f32 + 1.0) / TAU;
 const MAX_GENERAL_DROPS_PER_TICK: usize = 2;
 /// Extra distance beyond the head's pickup reach at which a boost ball is dropped when the snake has no body yet.
@@ -358,6 +362,7 @@ impl GameWorld {
                     id: sample_id,
                     position,
                 });
+                relax_body(&mut snake.body);
                 while snake.body.len() > snake.desired_body_points(self.tier.ticket()) {
                     snake.body.pop_front();
                 }
@@ -1052,6 +1057,29 @@ fn normalize_angle(value: f32) -> f32 {
     (value + PI).rem_euclid(TAU) - PI
 }
 
+/// Pulls older samples toward the sample ahead of them. The three newest points stay put, the
+/// next four close a growing fraction of the gap, and every point behind those closes `BODY_PULL`
+/// of the gap to the point that was just updated. On a bend that shortcut points inside the curve,
+/// so a held turn tightens the coil while the head keeps its radius.
+fn relax_body(body: &mut VecDeque<BodyPoint>) {
+    let count = body.len();
+    if count <= BODY_RIGID_POINTS {
+        return;
+    }
+    let anchor = count - BODY_RIGID_POINTS;
+    let mut target = body[anchor].position;
+    let mut amount = 0.0;
+    for step in 1..=anchor {
+        let index = anchor - step;
+        if step <= BODY_PULL_RAMP {
+            amount = BODY_PULL * step as f32 / BODY_PULL_RAMP as f32;
+        }
+        let updated = body[index].position.pulled_toward(target, amount);
+        body[index].position = updated;
+        target = updated;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1216,6 +1244,132 @@ mod tests {
                 (point.position.distance_squared(center).sqrt() - SPAWN_BODY_RADIUS).abs() < 0.01
             );
         }
+    }
+
+    #[test]
+    fn body_pull_keeps_the_neck_and_shortcuts_older_points() {
+        let mut body = VecDeque::new();
+        for index in 0..8 {
+            body.push_back(BodyPoint {
+                id: index,
+                position: Vec2 {
+                    x: index as f32 * BODY_SPACING,
+                    y: 0.0,
+                },
+            });
+        }
+        let neck: Vec<_> = body.iter().rev().take(BODY_RIGID_POINTS).map(|point| point.position.x).collect();
+
+        relax_body(&mut body);
+
+        let kept: Vec<_> = body.iter().rev().take(BODY_RIGID_POINTS).map(|point| point.position.x).collect();
+        assert_eq!(kept, neck);
+        assert!((body[4].position.x - 41.075).abs() < 1e-3);
+        assert!((body[3].position.x - 32.381125).abs() < 1e-3);
+        assert!(body[0].position.x > 0.0);
+        assert!(body[0].position.y.abs() < 1e-4);
+    }
+
+    #[test]
+    fn body_pull_moves_a_circle_inward_and_crosses_the_seam_on_the_short_side() {
+        let radius = 40.0;
+        let mut circle = VecDeque::new();
+        for index in 0..12 {
+            let angle = index as f32 * BODY_SPACING / radius;
+            circle.push_back(BodyPoint {
+                id: index,
+                position: Vec2 {
+                    x: radius * angle.cos(),
+                    y: radius * angle.sin(),
+                },
+            });
+        }
+        let newest = circle.back().unwrap().position;
+        relax_body(&mut circle);
+        assert_eq!(circle.back().unwrap().position.x, newest.x);
+        assert_eq!(circle.back().unwrap().position.y, newest.y);
+        let tail_radius = circle.front().unwrap().position.distance_squared(Vec2::default()).sqrt();
+        assert!(
+            tail_radius < radius - 1.0,
+            "tail stayed at {tail_radius}, circle radius {radius}"
+        );
+
+        let mut seam = VecDeque::new();
+        for (id, x) in [
+            (1, ARENA_HALF_EXTENT - 1.0),
+            (2, -ARENA_HALF_EXTENT + 100.0),
+            (3, -ARENA_HALF_EXTENT + 110.0),
+            (4, -ARENA_HALF_EXTENT + 120.0),
+        ] {
+            seam.push_back(BodyPoint {
+                id,
+                position: Vec2 { x, y: 0.0 },
+            });
+        }
+        relax_body(&mut seam);
+        assert!(
+            seam[0].position.x < -ARENA_HALF_EXTENT + 100.0,
+            "tail moved the long way to {}",
+            seam[0].position.x
+        );
+    }
+
+    #[test]
+    fn held_turn_pulls_the_body_inside_the_heads_circle() {
+        let mut world = GameWorld::test_world();
+        let id = world.join("Coil".into(), "red".into());
+        let ticks = ((TAU / TURN_RATE) * f32::from(TICK_RATE) * 2.0).ceil() as u32;
+        let mut heads = Vec::new();
+        for step in 1..=ticks {
+            let angle = world.snakes.get(&id).unwrap().angle;
+            world.input(id, step, normalize_angle(angle + 1.0), false);
+            world.tick();
+            if step > ticks / 2 {
+                heads.push(world.snakes.get(&id).unwrap().position);
+            }
+        }
+
+        let center = Vec2 {
+            x: heads.iter().map(|point| point.x).sum::<f32>() / heads.len() as f32,
+            y: heads.iter().map(|point| point.y).sum::<f32>() / heads.len() as f32,
+        };
+        let head_radius = heads
+            .iter()
+            .map(|point| point.distance_squared(center).sqrt())
+            .sum::<f32>()
+            / heads.len() as f32;
+        let head_spread = heads
+            .iter()
+            .map(|point| (point.distance_squared(center).sqrt() - head_radius).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            head_spread < 1.0,
+            "head left a circle: radius {head_radius}, spread {head_spread}"
+        );
+
+        let snake = world.snakes.get(&id).unwrap();
+        let neck_radius = snake
+            .body
+            .back()
+            .unwrap()
+            .position
+            .distance_squared(center)
+            .sqrt();
+        assert!(
+            (neck_radius - head_radius).abs() < 3.0,
+            "newest point radius {neck_radius} left the head circle {head_radius}"
+        );
+        let tail_radius = snake
+            .body
+            .front()
+            .unwrap()
+            .position
+            .distance_squared(center)
+            .sqrt();
+        assert!(
+            tail_radius < head_radius - 4.0,
+            "tail radius {tail_radius} stayed on the head circle {head_radius}"
+        );
     }
 
     #[test]

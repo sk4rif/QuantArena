@@ -5,8 +5,8 @@ import { FOOD_GLOW_RADIUS_MULTIPLIER, PROTOCOL_VERSION, isServerMessage, type Ca
 
 export type ConnectionStatus = "connecting" | "connected" | "resyncing" | "disconnected" | "error";
 
-/** About 0.75°, inside the 0.5–1° band where aim is worth a new packet. */
-export const INPUT_AIM_EPSILON_RADIANS = (0.75 * Math.PI) / 180;
+/** Half a degree. Smaller aim changes wait for the keepalive. */
+export const INPUT_AIM_EPSILON_RADIANS = (0.5 * Math.PI) / 180;
 /** The server keeps the last aim and boost, so this only refreshes the session. */
 export const INPUT_KEEPALIVE_MS = 400;
 export const RESYNC_MIN_INTERVAL_MS = 1000;

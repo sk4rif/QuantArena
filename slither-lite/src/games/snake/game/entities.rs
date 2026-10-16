@@ -30,6 +30,15 @@ impl Vec2 {
             y: wrap_coordinate(self.y),
         }
     }
+
+    /// Moves `amount` of the way toward `target` along the shortest wrapped step.
+    pub fn pulled_toward(self, target: Self, amount: f32) -> Self {
+        Self {
+            x: self.x + wrapped_delta(target.x - self.x) * amount,
+            y: self.y + wrapped_delta(target.y - self.y) * amount,
+        }
+        .wrapped()
+    }
 }
 
 fn wrapped_delta(value: f32) -> f32 {
